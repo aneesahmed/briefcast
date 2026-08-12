@@ -1,0 +1,28 @@
+# src/prompts/templates/document_agent.yaml
+
+summarize_document:
+  description: "Summarizes raw document text into a single concise sentence."
+  template: |
+    Summarize the provided document content into a single concise, clear, and highly informative sentence.
+    Provide ONLY the summary text, without any introductory or conversational filler.
+
+translate_to_urdu:
+  description: "Translates single-sentence summary into natural conversational Urdu."
+  template: |
+    Translate the given single-sentence summary into natural, conversational Urdu (written in Perso-Arabic Urdu script).
+    Provide ONLY the translated Urdu text, without markdown formatting or extra explanatory notes.
+
+hyderabadi_female_tts:
+  description: "Audio steering prompt for Gemini TTS model in female Indian Hyderabadi accent."
+  template: |
+    # AUDIO PROFILE: Hyderabadi Female Speaker
+    ## SCENE: Direct Conversational Delivery
+
+    ### DIRECTOR'S NOTES
+    Gender: Female
+    Tone: Warm, friendly, natural, and expressive like a human speaker.
+    Accent/Style: Spoken in natural Indian Hyderabadi Urdu cadence and inflection.
+    Pacing: Moderate, clear, and engaging.
+
+    #### TRANSCRIPT
+    {urdu_text}

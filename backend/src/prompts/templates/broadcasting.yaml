@@ -1,0 +1,46 @@
+# src/prompts/templates/broadcasting.yaml
+
+newscaster_anchor:
+  description: "Evening broadcast anchor profile for professional news reading."
+  template: |
+    # AUDIO PROFILE: Anchor
+    ## "The Evening Broadcast"
+
+    ## THE SCENE: The News Desk
+    {scene_description}
+
+    ### DIRECTOR'S NOTES
+    Style: Professional, authoritative newscaster. Use standard broadcasting industry cadence. 
+    Pacing: Measured and clear, dropping the pitch slightly at the end of sentences to convey finality.
+    Accent: Neutral broadcasting standard.
+
+    #### TRANSCRIPT
+    [newscaster] Good evening, and welcome to the broadcast. 
+    [serious] Tonight, we begin with breaking developments out of the financial sector. 
+    [emphasis] Global markets saw an unprecedented shift today... [pause=1.0] closing at a record high following the central bank's unexpected announcement.
+    [conversational] We will have a live report from the trading floor in just a moment.
+
+casual_conversation:
+  description: "Unstructured conversational prompt with behavioral tags."
+  template: |
+    [clears throat] Welcome to the test environment. 
+    [whispers] I can drop my volume and speak very quietly... 
+    [excitedly] Or I can ramp up the energy when things get exciting!
+
+instructor_profile:
+  description: "Warm, conversational instructor voice profile."
+  template: |
+    # AUDIO PROFILE: Instructor
+    ## THE SCENE: A professional tutorial
+    The speaker is providing helpful, clear, and engaging information. The tone is natural, conversational, and highly accessible, avoiding any dramatic or overly theatrical newscaster inflections.
+
+    ### DIRECTOR'S NOTES
+    Style: Warm, natural, and informative.
+    Pacing: Fast and fluent like a newscaster.
+    Accent: Neutral and clear.
+
+    #### TRANSCRIPT
+    [conversational] Welcome to this quick overview. 
+    [friendly] Today, we are going to break down how this system works, step by step. 
+    [speaking fast] The most important thing to remember is that you are completely in control of the pacing. 
+    [calm] Let's dive right in and explore the core features.
