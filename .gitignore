@@ -59,3 +59,4 @@ backend/output_audio/*
 backend/assets/*.wav
 briefcast_db.json
 !*.env.example
+!tsconfig.*.json
