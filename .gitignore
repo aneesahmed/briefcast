@@ -46,3 +46,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .eslintcache
+
+# Ignored User and Generated Data
+backend/input_docs/*
+!backend/input_docs/.gitkeep
+backend/processed_docs/*
+!backend/processed_docs/.gitkeep
+backend/output_audio/*
+!backend/output_audio/.gitkeep
+*.wav
+*.raw
+backend/assets/*.wav
+briefcast_db.json
+!*.env.example
