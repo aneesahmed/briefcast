@@ -1,6 +1,7 @@
 // src/App.tsx
 import React, { useState, useEffect } from 'react';
 import type { ProcessResult } from './types';
+import { api } from './services/api';
 import Dashboard from './components/Dashboard';
 import Studio from './components/Studio';
 import Audit from './components/Audit';
@@ -9,15 +10,10 @@ export default function App() {
   const [activeView, setActiveView] = useState<'dashboard' | 'studio' | 'audit'>('dashboard');
   const [history, setHistory] = useState<ProcessResult[]>([]);
 
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-
   const fetchHistory = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/history`);
-      if (response.ok) {
-        const data = await response.json();
-        setHistory(data.history || []);
-      }
+      const data = await api.getHistory();
+      setHistory(data);
     } catch (err) {
       console.error('Failed to load history', err);
     }
@@ -89,8 +85,8 @@ export default function App() {
         {/* VIEW ROUTER */}
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           {activeView === 'dashboard' && <Dashboard history={history} setActiveView={setActiveView} />}
-          {activeView === 'studio' && <Studio API_BASE_URL={API_BASE_URL} onProcessingComplete={fetchHistory} />}
-          {activeView === 'audit' && <Audit history={history} API_BASE_URL={API_BASE_URL} />}
+          {activeView === 'studio' && <Studio onProcessingComplete={fetchHistory} />}
+          {activeView === 'audit' && <Audit history={history} />}
         </div>
       </div>
     </>

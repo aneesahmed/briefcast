@@ -1,16 +1,14 @@
 // src/components/Audit.tsx
 import React, { useState } from 'react';
 import type { ProcessResult } from '../types';
+import { api } from '../services/api';
 
 interface AuditProps {
   history: ProcessResult[];
-  API_BASE_URL?: string;
 }
 
-export default function Audit({ history, API_BASE_URL }: AuditProps) {
+export default function Audit({ history }: AuditProps) {
   const [selectedAuditDoc, setSelectedAuditDoc] = useState<ProcessResult | null>(null);
-
-  const API_URL = API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%' }}>
@@ -90,7 +88,7 @@ export default function Audit({ history, API_BASE_URL }: AuditProps) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
               <div>
                 <h3 style={{ color: '#4b5563', fontSize: '0.9rem', textTransform: 'uppercase', marginBottom: '0.75rem' }}>🎙️ Processed Audio</h3>
-                <audio controls src={`${API_URL}${selectedAuditDoc.download_url}`} style={{ width: '100%', height: '40px' }} />
+                <audio controls src={api.getAudioUrl(selectedAuditDoc.download_url)} style={{ width: '100%', height: '40px' }} />
               </div>
               <div>
                 <h3 style={{ color: '#4b5563', fontSize: '0.9rem', textTransform: 'uppercase', marginBottom: '0.75rem' }}>Urdu Translation</h3>

@@ -1,15 +1,13 @@
 // src/components/Studio.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import type { GlobalSettings } from '../types';
+import { api } from '../services/api';
 
 interface StudioProps {
-  API_BASE_URL?: string;
   onProcessingComplete: () => void;
 }
 
-export default function Studio({ API_BASE_URL, onProcessingComplete }: StudioProps) {
-  const API_URL = API_BASE_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-
+export default function Studio({ onProcessingComplete }: StudioProps) {
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -43,17 +41,14 @@ export default function Studio({ API_BASE_URL, onProcessingComplete }: StudioPro
   useEffect(() => {
     const fetchSettings = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/settings`);
-        if (response.ok) {
-          const settings: GlobalSettings = await response.json();
-          setConfig((prev) => ({ ...prev, ...settings }));
-        }
+        const settings = await api.getSettings();
+        setConfig((prev) => ({ ...prev, ...settings }));
       } catch (err) {
         console.error('Failed to load global settings:', err);
       }
     };
     fetchSettings();
-  }, [API_URL]);
+  }, []);
 
   const handleFileUpload = async () => {
     if (!selectedFiles || selectedFiles.length === 0) return;
@@ -67,9 +62,7 @@ export default function Studio({ API_BASE_URL, onProcessingComplete }: StudioPro
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/upload-docs`, { method: 'POST', body: formData });
-      if (!response.ok) throw new Error(`Upload failed: ${response.statusText}`);
-      const data = await response.json();
+      const data = await api.uploadDocs(selectedFiles);
       setUploadMessage(data.message);
       setSelectedFiles(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -92,13 +85,7 @@ export default function Studio({ API_BASE_URL, onProcessingComplete }: StudioPro
     setActiveStep('summary');
     setStudioError(null);
     try {
-      const res = await fetch(`${API_URL}/api/step/summary`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: currentFile, config, force }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const data = await api.runSummary(currentFile, config, force);
       setEnglishSummary(data.english_summary);
       setCurrentFile(data.filename);
       setSummaryMeta(data);
@@ -117,13 +104,7 @@ export default function Studio({ API_BASE_URL, onProcessingComplete }: StudioPro
     setActiveStep('translation');
     setStudioError(null);
     try {
-      const res = await fetch(`${API_URL}/api/step/translation`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: currentFile, english_summary: englishSummary, config, force }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const data = await api.runTranslation(currentFile, englishSummary, config, force);
       setUrduTranslation(data.urdu_summary);
       setTranslationMeta(data);
     } catch (err: any) {
@@ -141,14 +122,8 @@ export default function Studio({ API_BASE_URL, onProcessingComplete }: StudioPro
     setActiveStep('audio');
     setStudioError(null);
     try {
-      const res = await fetch(`${API_URL}/api/step/audio`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: currentFile, urdu_summary: urduTranslation, config, force }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setAudioUrl(`${API_URL}${data.download_url}`);
+      const data = await api.runAudio(currentFile, urduTranslation, config, force);
+      setAudioUrl(api.getAudioUrl(data.download_url));
       setAudioMeta(data);
       onProcessingComplete();
     } catch (err: any) {
