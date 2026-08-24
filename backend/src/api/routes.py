@@ -9,8 +9,9 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, File, HTTPException, UploadFile, Body
+from fastapi import APIRouter, File, HTTPException, UploadFile, Body, BackgroundTasks, Form
 from fastapi.responses import FileResponse
+import requests
 from tinydb import TinyDB, Query
 
 from src.core.config import INPUT_DOCS_DIR, PROCESSED_DOCS_DIR
@@ -588,3 +589,159 @@ async def get_audio_file(filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
     return FileResponse(path=file_path, media_type="audio/wav", filename=filename)
+
+
+async def _run_pipeline_background(
+    filename: str,
+    content: str,
+    config: PipelineConfig,
+    webhook_url: Optional[str] = None
+):
+    """Background task to run the pipeline on a single document and fire a webhook."""
+    base_name = Path(filename).stem
+    ext = Path(filename).suffix
+    source_file = INPUT_DOCS_DIR / filename
+    archive_path = PROCESSED_DOCS_DIR / f"source_{base_name}{ext}"
+
+    transaction_id = str(uuid.uuid4())
+    audio_filename = f"audio_{base_name}_{transaction_id[:8]}.wav"
+
+    doc_record = {}
+    try:
+        pipeline_payload = config.model_dump()
+        initial_state = {
+            "raw_text": content,
+            "filename": filename,
+            "output_dir": PROCESSED_DOCS_DIR,
+            "english_summary": "",
+            "urdu_summary": "",
+            "audio_path": audio_filename,
+            "pipeline_config": pipeline_payload,
+            "summary_metrics": {},
+            "translation_metrics": {},
+            "audio_metrics": {},
+        }
+
+        final_state = await document_graph.ainvoke(initial_state)
+
+        summary_metrics = final_state.get("summary_metrics", {})
+        translation_metrics = final_state.get("translation_metrics", {})
+        audio_metrics = final_state.get("audio_metrics", {})
+
+        c_sum = calculate_step_cost(
+            config.summary_provider, config.summary_model, content,
+            usage=summary_metrics.get("usage", {}),
+        )
+        c_tra = calculate_step_cost(
+            config.translation_provider,
+            config.translation_model,
+            final_state["english_summary"],
+            usage=translation_metrics.get("usage", {}),
+        )
+        if config.audio_provider == "local":
+            c_aud = calculate_step_cost(
+                config.audio_provider, config.audio_model, final_state["urdu_summary"]
+            )
+        else:
+            approx_output_tokens = len(final_state["urdu_summary"]) // 4
+            c_aud = calculate_step_cost(
+                config.audio_provider, config.audio_model, final_state["urdu_summary"],
+                usage={"output_tokens": approx_output_tokens},
+            )
+
+        tot_usd = (
+            c_sum["pricing_estimation"]["raw_values"]["total_usd"]
+            + c_tra["pricing_estimation"]["raw_values"]["total_usd"]
+            + c_aud["pricing_estimation"]["raw_values"]["total_usd"]
+        )
+        tot_pkr = (
+            c_sum["pricing_estimation"]["raw_values"]["total_pkr"]
+            + c_tra["pricing_estimation"]["raw_values"]["total_pkr"]
+            + c_aud["pricing_estimation"]["raw_values"]["total_pkr"]
+        )
+
+        if source_file.exists():
+            shutil.move(str(source_file), str(archive_path))
+
+        doc_record = {
+            "id": transaction_id,
+            "transaction_id": transaction_id,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "success",
+            "filename": filename,
+            "english_summary": final_state["english_summary"],
+            "urdu_summary": final_state["urdu_summary"],
+            "audio_file": audio_filename,
+            "download_url": f"/audio/{audio_filename}",
+            "models_used": {
+                "summary_model": config.summary_model,
+                "translation_model": config.translation_model,
+                "audio_model": config.audio_model,
+            },
+            "cost_metrics": {
+                "total_cost_usd": f"${tot_usd:.6f}",
+                "total_cost_pkr": f"Rs. {tot_pkr:.4f}",
+            }
+        }
+        db.insert(doc_record)
+        logger.info(f"Successfully processed {filename} in background.")
+
+    except Exception as e:
+        logger.error(f"Error processing {filename} in background: {str(e)}")
+        doc_record = {
+            "id": transaction_id,
+            "transaction_id": transaction_id,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "error",
+            "filename": filename,
+            "error": str(e)
+        }
+        db.insert(doc_record)
+
+    # Fire Webhook if requested
+    if webhook_url:
+        try:
+            # We are running in an async context, but `requests.post` is blocking.
+            # Using asyncio.to_thread for safety.
+            def send_webhook():
+                requests.post(webhook_url, json=doc_record, timeout=10)
+            await asyncio.to_thread(send_webhook)
+            logger.info(f"Fired webhook to {webhook_url}")
+        except Exception as e:
+            logger.error(f"Failed to fire webhook to {webhook_url}: {str(e)}")
+
+
+@router.post("/api/process-document-async")
+async def process_document_async(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    webhook_url: Optional[str] = Form(None)
+):
+    try:
+        # Save the uploaded file
+        safe_filename = os.path.basename(file.filename)
+        input_path = INPUT_DOCS_DIR / safe_filename
+        with open(input_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Read content
+        with open(input_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        # Load global settings for config (can be overridden by forms later if needed)
+        record = settings_table.get(doc_id=1)
+        config = PipelineConfig(**(record or GlobalSettings().model_dump()))
+
+        # Queue background task
+        background_tasks.add_task(_run_pipeline_background, safe_filename, content, config, webhook_url)
+
+        return {
+            "status": "queued",
+            "message": f"Document {safe_filename} successfully queued for processing.",
+            "filename": safe_filename,
+            "webhook_url": webhook_url
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
