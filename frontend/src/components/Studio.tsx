@@ -216,7 +216,7 @@ export default function Studio({ onProcessingComplete }: StudioProps) {
             <button onClick={() => handleRunSummary(false)} disabled={activeStep !== null} style={{ padding: '0.5rem 1rem', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>{activeStep === 'summary' ? 'Summarizing...' : '▶ Run Step 1'}</button>
           </div>
         </div>
-        {renderEngineSelect('Summary Engine', 'summary_provider', 'summary_model', ['llama3', 'llama3.1', 'qwen2.5'], ['gemini-2.5-flash'])}
+        {renderEngineSelect('Summary Engine', 'summary_provider', 'summary_model', ['llama3', 'llama3.1', 'qwen2.5'], ['gemini-3.5-flash', 'gemini-2.5-flash'])}
         <textarea
           rows={4}
           value={englishSummary}
@@ -236,7 +236,7 @@ export default function Studio({ onProcessingComplete }: StudioProps) {
             <button onClick={() => handleRunTranslation(false)} disabled={activeStep !== null || !englishSummary.trim()} style={{ padding: '0.5rem 1rem', backgroundColor: (!englishSummary.trim() || activeStep !== null) ? '#94a3b8' : '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>{activeStep === 'translation' ? 'Translating...' : '▶ Run Step 2'}</button>
           </div>
         </div>
-        {renderEngineSelect('Translation Engine', 'translation_provider', 'translation_model', ['llama3', 'qwen2.5', 'aya'], ['gemini-2.5-flash'])}
+        {renderEngineSelect('Translation Engine', 'translation_provider', 'translation_model', ['llama3', 'qwen2.5', 'aya'], ['gemini-3.5-flash', 'gemini-2.5-flash'])}
         <textarea
           rows={4}
           value={urduTranslation}
@@ -282,7 +282,7 @@ export default function Studio({ onProcessingComplete }: StudioProps) {
           </div>
         </div>
 
-        {renderEngineSelect('Audio Engine', 'audio_provider', 'audio_model', ['facebook/mms-tts-urd-script_arabic'], ['gemini-2.5-flash-preview-tts'])}
+        {renderEngineSelect('Audio Engine', 'audio_provider', 'audio_model', ['facebook/mms-tts-urd-script_arabic'], ['gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'])}
         
         {renderMetricsBox(audioMeta)}
 

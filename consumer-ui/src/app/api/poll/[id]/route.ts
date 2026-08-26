@@ -1,21 +1,22 @@
 import { NextResponse } from 'next/server';
 
-export async function POST(req: Request) {
+export async function GET(req: Request, { params }: { params: { id: string } }) {
   try {
-    const formData = await req.formData();
-    // Configurable via .env
+    const jobId = params.id;
     const fastApiUrl = process.env.BACKEND_API_URL || 'http://127.0.0.1:8042/api/process-document';
-    const webhookUrl = process.env.WEBHOOK_URL || 'http://127.0.0.1:3042/api/webhook';
     
-    formData.append('webhook_url', webhookUrl);
+    // Instead of using the old GET /job-status, we hit the combined POST endpoint
+    // by providing the job_id as form data.
+    const formData = new FormData();
+    formData.append('job_id', jobId);
 
     const response = await fetch(fastApiUrl, {
       method: 'POST',
-      body: formData,
+      body: formData
     });
 
     if (!response.ok) {
-      throw new Error(`FastAPI returned ${response.status} ${await response.text()}`);
+      throw new Error(`FastAPI returned ${response.status}`);
     }
     const data = await response.json();
     return NextResponse.json(data);
@@ -23,3 +24,4 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+

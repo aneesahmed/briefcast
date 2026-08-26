@@ -19,13 +19,17 @@ RUN pip install uv
 COPY pyproject.toml uv.lock ./
 
 # Install dependencies using uv
-RUN uv pip install --system -r pyproject.toml
+RUN uv sync --system
 
 # Copy application source
 COPY . .
 
 # Expose port
 EXPOSE 8080
+
+# Switch to non-root user
+RUN useradd -m appuser && chown -R appuser /app
+USER appuser
 
 # Command to run the application
 CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

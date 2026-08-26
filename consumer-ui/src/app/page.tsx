@@ -5,7 +5,10 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<string>('');
   const [records, setRecords] = useState<any[]>([]);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [pollData, setPollData] = useState<any>(null);
 
+  // Keep webhook polling
   const fetchStatus = async () => {
     try {
       const res = await fetch('/api/status');
@@ -20,13 +23,45 @@ export default function Home() {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 3000); // poll every 3 seconds
+    const interval = setInterval(fetchStatus, 3000); 
     return () => clearInterval(interval);
   }, []);
+
+  // Job Polling logic
+  useEffect(() => {
+    if (!activeJobId) return;
+
+    const pollJob = async () => {
+      try {
+        const res = await fetch(`/api/poll/${activeJobId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setPollData(data);
+          
+          if (data.status === 'in progress') {
+            setStatus(`Processing... Elapsed time: ${data.total_time}`);
+          } else if (data.status === 'completed') {
+            setStatus(`Complete! Total time: ${data.total_time}`);
+            setActiveJobId(null); // Stop polling
+          } else if (data.status === 'error') {
+            setStatus(`Error: ${data.error}`);
+            setActiveJobId(null); // Stop polling
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    pollJob(); // fire immediately
+    const interval = setInterval(pollJob, 2000); // poll every 2s
+    return () => clearInterval(interval);
+  }, [activeJobId]);
 
   const handleUpload = async () => {
     if (!file) return;
     setStatus('Uploading...');
+    setPollData(null);
     const formData = new FormData();
     formData.append('file', file);
     
@@ -36,7 +71,10 @@ export default function Home() {
         body: formData,
       });
       const data = await res.json();
-      if (res.ok) {
+      if (res.ok && data.job_id) {
+        setStatus(`Queued (Job ID: ${data.job_id.substring(0,8)}...)`);
+        setActiveJobId(data.job_id);
+      } else if (res.ok) {
         setStatus(`Success: ${data.message || 'Queued'}`);
       } else {
         setStatus(`Error: ${data.error}`);
@@ -46,13 +84,17 @@ export default function Home() {
     }
   };
 
+  // Base URL for audio playback (hardcoded fallback for local UI testing)
+  const getAudioUrl = (path: string) => {
+    if (path.startsWith('http')) return path;
+    return `http://127.0.0.1:8042${path}`; // Can be adapted via env vars
+  };
+
   return (
     <main className="p-8 max-w-4xl mx-auto font-sans">
       <h1 className="text-3xl font-bold mb-6 text-gray-800">Briefcast Consumer UI</h1>
       <p className="mb-8 text-gray-600">
-        This is an isolated Next.js client that tests the async processing pipeline. 
-        It sends a document to the FastAPI backend, which will process it in the background 
-        and POST the results back to our webhook endpoint.
+        This Next.js client tests the async processing pipeline using both **Webhooks** and **Direct Polling**.
       </p>
       
       <div className="bg-white border rounded-lg p-6 shadow-sm mb-8">
@@ -64,12 +106,25 @@ export default function Home() {
         />
         <button 
           onClick={handleUpload}
-          disabled={!file}
+          disabled={!file || activeJobId !== null}
           className="mt-4 px-4 py-2 bg-blue-600 text-white font-medium rounded hover:bg-blue-700 disabled:opacity-50"
         >
           Send to Backend (Async)
         </button>
-        {status && <p className="mt-4 text-sm font-medium p-3 bg-gray-50 rounded border">{status}</p>}
+        {status && (
+          <div className="mt-4 text-sm font-medium p-3 bg-gray-50 rounded border flex justify-between items-center">
+            <span>{status}</span>
+            {activeJobId && <span className="animate-spin text-blue-500">⏳</span>}
+          </div>
+        )}
+
+        {pollData && pollData.status === 'completed' && (
+          <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+            <h3 className="font-bold text-green-800 mb-2">🎉 Polling Successful!</h3>
+            <p className="text-sm text-green-700 mb-3">The polling loop detected that the audio is ready.</p>
+            <audio controls src={getAudioUrl(pollData.audio_url)} className="w-full h-10" />
+          </div>
+        )}
       </div>
 
       <div>
@@ -78,7 +133,7 @@ export default function Home() {
           <span className="text-xs font-normal bg-green-100 text-green-800 px-2 py-1 rounded">Auto-refreshing</span>
         </h2>
         {records.length === 0 ? (
-          <p className="text-gray-500 text-sm italic">No webhooks received yet. Upload a document to start.</p>
+          <p className="text-gray-500 text-sm italic">No webhooks received yet.</p>
         ) : (
           <div className="space-y-4">
             {records.map((rec, i) => (
@@ -99,8 +154,8 @@ export default function Home() {
 
                 {rec.status === 'success' && rec.download_url && (
                   <div className="mt-5 p-4 bg-white border rounded-lg">
-                    <p className="font-bold text-gray-800 mb-2">Listen to Output:</p>
-                    <audio controls src={`http://127.0.0.1:8000${rec.download_url}`} className="w-full h-10" />
+                    <p className="font-bold text-gray-800 mb-2">Listen to Output (From Webhook):</p>
+                    <audio controls src={getAudioUrl(rec.download_url)} className="w-full h-10" />
                   </div>
                 )}
               </div>

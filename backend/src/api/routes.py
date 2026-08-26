@@ -97,12 +97,13 @@ def _empty_phase_telemetry(provider: str = None, model: str = None) -> Dict[str,
     }
 
 
-@router.get("/")
+@router.get("/", tags=["Health"])
 async def health_check():
     return {"status": "ok"}
 
 
-@router.get("/api/settings")
+
+@router.get("/api/settings", tags=["Settings"])
 async def get_settings():
     record = settings_table.get(doc_id=1)
     if record:
@@ -113,20 +114,23 @@ async def get_settings():
     return GlobalSettings().model_dump()
 
 
-@router.post("/api/settings")
+@router.post("/api/settings", tags=["Settings"])
 async def update_settings(settings: GlobalSettings):
-    settings_table.upsert(settings.model_dump(), doc_ids=[1])
+    if settings_table.contains(doc_id=1):
+        settings_table.update(settings.model_dump(), doc_ids=[1])
+    else:
+        settings_table.insert(settings.model_dump())
     return {"message": "Settings updated successfully"}
 
 
-@router.get("/api/history")
+@router.get("/api/history", tags=["Data"])
 async def get_history():
     records = db.all()
     records.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return {"history": records}
 
 
-@router.post("/api/upload-docs")
+@router.post("/api/upload-docs", tags=["Data"])
 async def upload_documents(files: List[UploadFile] = File(...)):
     saved_files = []
     for file in files:
@@ -145,7 +149,7 @@ async def upload_documents(files: List[UploadFile] = File(...)):
 # ==========================================
 
 
-@router.post("/api/step/summary")
+@router.post("/api/step/summary", tags=["React Studio (Step-by-Step)"])
 async def step_summary(payload: Dict[str, Any] = Body(...)):
     config = payload.get("config", {})
     filename = payload.get("filename")
@@ -215,7 +219,7 @@ async def step_summary(payload: Dict[str, Any] = Body(...)):
     }
 
 
-@router.post("/api/step/translation")
+@router.post("/api/step/translation", tags=["React Studio (Step-by-Step)"])
 async def step_translation(payload: Dict[str, Any] = Body(...)):
     config = payload.get("config", {})
     filename = payload.get("filename", "staged_doc.txt")
@@ -308,7 +312,7 @@ def _phase_raw_cost(meta: Optional[Dict[str, Any]]) -> tuple:
     return raw.get("total_usd", 0.0), raw.get("total_pkr", 0.0)
 
 
-@router.post("/api/step/audio")
+@router.post("/api/step/audio", tags=["React Studio (Step-by-Step)"])
 async def step_audio(payload: Dict[str, Any] = Body(...)):
     config = payload.get("config", {})
     filename = payload.get("filename", "staged_doc.txt")
@@ -445,145 +449,10 @@ async def step_audio(payload: Dict[str, Any] = Body(...)):
 
 
 # ==========================================
-# FULL PIPELINE FALLBACK & ASSETS
+# CORE BACKGROUND PIPELINE & ASSETS
 # ==========================================
 
-
-@router.post("/process-folder")
-async def process_folder(config: PipelineConfig = PipelineConfig()):
-    documents = await asyncio.to_thread(
-        DocumentService.read_folder, str(INPUT_DOCS_DIR)
-    )
-    if not documents:
-        return {"message": "No documents found."}
-
-    results = []
-    for filename, content in documents.items():
-        if content.startswith("Error extracting"):
-            results.append({"filename": filename, "error": content})
-            continue
-
-        base_name = Path(filename).stem
-        ext = Path(filename).suffix
-        source_file = INPUT_DOCS_DIR / filename
-        archive_path = PROCESSED_DOCS_DIR / f"source_{base_name}{ext}"
-
-        transaction_id = str(uuid.uuid4())
-        audio_filename = f"audio_{base_name}_{transaction_id[:8]}.wav"
-
-        try:
-            pipeline_payload = config.model_dump()
-            initial_state = {
-                "raw_text": content,
-                "filename": filename,
-                "output_dir": PROCESSED_DOCS_DIR,
-                "english_summary": "",
-                "urdu_summary": "",
-                "audio_path": audio_filename,
-                "pipeline_config": pipeline_payload,
-                "summary_metrics": {},
-                "translation_metrics": {},
-                "audio_metrics": {},
-            }
-
-            final_state = await document_graph.ainvoke(initial_state)
-
-            summary_metrics = final_state.get("summary_metrics", {})
-            translation_metrics = final_state.get("translation_metrics", {})
-            audio_metrics = final_state.get("audio_metrics", {})
-
-            c_sum = calculate_step_cost(
-                config.summary_provider, config.summary_model, content,
-                usage=summary_metrics.get("usage", {}),
-            )
-            c_tra = calculate_step_cost(
-                config.translation_provider,
-                config.translation_model,
-                final_state["english_summary"],
-                usage=translation_metrics.get("usage", {}),
-            )
-            if config.audio_provider == "local":
-                c_aud = calculate_step_cost(
-                    config.audio_provider, config.audio_model, final_state["urdu_summary"]
-                )
-            else:
-                approx_output_tokens = len(final_state["urdu_summary"]) // 4
-                c_aud = calculate_step_cost(
-                    config.audio_provider, config.audio_model, final_state["urdu_summary"],
-                    usage={"output_tokens": approx_output_tokens},
-                )
-
-            tot_usd = (
-                c_sum["pricing_estimation"]["raw_values"]["total_usd"]
-                + c_tra["pricing_estimation"]["raw_values"]["total_usd"]
-                + c_aud["pricing_estimation"]["raw_values"]["total_usd"]
-            )
-            tot_pkr = (
-                c_sum["pricing_estimation"]["raw_values"]["total_pkr"]
-                + c_tra["pricing_estimation"]["raw_values"]["total_pkr"]
-                + c_aud["pricing_estimation"]["raw_values"]["total_pkr"]
-            )
-
-            if source_file.exists():
-                shutil.move(str(source_file), str(archive_path))
-
-            doc_record = {
-                "id": transaction_id,
-                "transaction_id": transaction_id,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "filename": filename,
-                "english_summary": final_state["english_summary"],
-                "urdu_summary": final_state["urdu_summary"],
-                "audio_file": audio_filename,
-                "download_url": f"/audio/{audio_filename}",
-                "models_used": {
-                    "summary_model": config.summary_model,
-                    "translation_model": config.translation_model,
-                    "audio_model": config.audio_model,
-                },
-                "cost_metrics": {
-                    "total_cost_usd": f"${tot_usd:.6f}",
-                    "total_cost_pkr": f"Rs. {tot_pkr:.4f}",
-                },
-                "telemetry": {
-                    "summary_phase": {
-                        "usage": summary_metrics.get("usage", {}),
-                        "provider": config.summary_provider,
-                        "model": config.summary_model,
-                        "cost": {
-                            "total_cost_usd": c_sum["pricing_estimation"]["total_cost_usd"],
-                            "total_cost_pkr": c_sum["pricing_estimation"]["total_cost_pkr"],
-                        },
-                    },
-                    "translation_phase": {
-                        "usage": translation_metrics.get("usage", {}),
-                        "provider": config.translation_provider,
-                        "model": config.translation_model,
-                        "cost": {
-                            "total_cost_usd": c_tra["pricing_estimation"]["total_cost_usd"],
-                            "total_cost_pkr": c_tra["pricing_estimation"]["total_cost_pkr"],
-                        },
-                    },
-                    "audio_phase": {
-                        "characters": audio_metrics.get("characters", 0),
-                        "provider": config.audio_provider,
-                        "model": config.audio_model,
-                        "cost": {
-                            "total_cost_usd": c_aud["pricing_estimation"]["total_cost_usd"],
-                            "total_cost_pkr": c_aud["pricing_estimation"]["total_cost_pkr"],
-                        },
-                    },
-                },
-            }
-            db.insert(doc_record)
-            results.append(doc_record)
-        except Exception as e:
-            results.append({"filename": filename, "error": str(e)})
-
-    return {"processed_count": len(results), "results": results}
-
-
-@router.get("/audio/{filename}")
+@router.get("/audio/{filename}", tags=["Data"])
 async def get_audio_file(filename: str):
     file_path = PROCESSED_DOCS_DIR / filename
     if not file_path.exists():
@@ -591,22 +460,23 @@ async def get_audio_file(filename: str):
     return FileResponse(path=file_path, media_type="audio/wav", filename=filename)
 
 
-async def _run_pipeline_background(
+async def _run_pipeline_core(
+    transaction_id: str,
     filename: str,
     content: str,
-    config: PipelineConfig,
-    webhook_url: Optional[str] = None
-):
-    """Background task to run the pipeline on a single document and fire a webhook."""
+    config: PipelineConfig
+) -> dict:
+    """Core pipeline execution, returns the completed doc_record dict."""
     base_name = Path(filename).stem
     ext = Path(filename).suffix
     source_file = INPUT_DOCS_DIR / filename
-    archive_path = PROCESSED_DOCS_DIR / f"source_{base_name}{ext}"
-
-    transaction_id = str(uuid.uuid4())
-    audio_filename = f"audio_{base_name}_{transaction_id[:8]}.wav"
-
+    archive_path = PROCESSED_DOCS_DIR / f"{base_name}{ext}"
+    audio_filename = f"{base_name}.wav"
+    
+    start_time = time.time()
+    q = Query()
     doc_record = {}
+
     try:
         pipeline_payload = config.model_dump()
         initial_state = {
@@ -660,15 +530,22 @@ async def _run_pipeline_background(
             + c_aud["pricing_estimation"]["raw_values"]["total_pkr"]
         )
 
+        # Save the intermediate text files as requested
+        with open(PROCESSED_DOCS_DIR / f"{base_name}_summary.txt", "w", encoding="utf-8") as f:
+            f.write(final_state["english_summary"])
+            
+        with open(PROCESSED_DOCS_DIR / f"{base_name}_translation.txt", "w", encoding="utf-8") as f:
+            f.write(final_state["urdu_summary"])
+
         if source_file.exists():
             shutil.move(str(source_file), str(archive_path))
 
+        total_time = round(time.time() - start_time, 2)
+        
         doc_record = {
-            "id": transaction_id,
-            "transaction_id": transaction_id,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "status": "success",
-            "filename": filename,
+            "status": "completed",
+            "total_time_seconds": total_time,
             "english_summary": final_state["english_summary"],
             "urdu_summary": final_state["urdu_summary"],
             "audio_file": audio_filename,
@@ -681,28 +558,55 @@ async def _run_pipeline_background(
             "cost_metrics": {
                 "total_cost_usd": f"${tot_usd:.6f}",
                 "total_cost_pkr": f"Rs. {tot_pkr:.4f}",
+            },
+            "telemetry": {
+                "summary_phase": {
+                    "usage": summary_metrics.get("usage", {}),
+                    "provider": config.summary_provider,
+                    "model": config.summary_model,
+                },
+                "translation_phase": {
+                    "usage": translation_metrics.get("usage", {}),
+                    "provider": config.translation_provider,
+                    "model": config.translation_model,
+                },
+                "audio_phase": {
+                    "characters": audio_metrics.get("characters", 0),
+                    "provider": config.audio_provider,
+                    "model": config.audio_model,
+                }
             }
         }
-        db.insert(doc_record)
-        logger.info(f"Successfully processed {filename} in background.")
+        db.update(doc_record, q.id == transaction_id)
+        doc_record = db.get(q.id == transaction_id)
+        logger.info(f"Successfully processed {filename} in {total_time}s.")
+        return doc_record
 
     except Exception as e:
-        logger.error(f"Error processing {filename} in background: {str(e)}")
+        logger.error(f"Error processing {filename}: {str(e)}")
+        total_time = round(time.time() - start_time, 2)
         doc_record = {
-            "id": transaction_id,
-            "transaction_id": transaction_id,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "status": "error",
-            "filename": filename,
+            "total_time_seconds": total_time,
             "error": str(e)
         }
-        db.insert(doc_record)
+        db.update(doc_record, q.id == transaction_id)
+        return db.get(q.id == transaction_id)
 
-    # Fire Webhook if requested
-    if webhook_url:
+
+async def _run_pipeline_background(
+    transaction_id: str,
+    filename: str,
+    content: str,
+    config: PipelineConfig,
+    webhook_url: str
+):
+    """Background task to run the core pipeline and fire a webhook."""
+    doc_record = await _run_pipeline_core(transaction_id, filename, content, config)
+    
+    if webhook_url and doc_record:
         try:
-            # We are running in an async context, but `requests.post` is blocking.
-            # Using asyncio.to_thread for safety.
             def send_webhook():
                 requests.post(webhook_url, json=doc_record, timeout=10)
             await asyncio.to_thread(send_webhook)
@@ -711,37 +615,87 @@ async def _run_pipeline_background(
             logger.error(f"Failed to fire webhook to {webhook_url}: {str(e)}")
 
 
-@router.post("/api/process-document-async")
-async def process_document_async(
+@router.get("/api/get_audio", tags=["Audio"])
+@router.post("/api/get_audio", tags=["Audio"])
+async def get_audio_shared(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    webhook_url: Optional[str] = Form(None)
+    file_name: Optional[str] = None,
+    job_id: Optional[str] = None
 ):
-    try:
-        # Save the uploaded file
-        safe_filename = os.path.basename(file.filename)
-        input_path = INPUT_DOCS_DIR / safe_filename
-        with open(input_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+    """
+    Checks the briefing_source folder for the file. 
+    Generates summary, translation, and audio, storing them in the processed subfolder.
+    Acts asynchronously and returns status JSON.
+    Can be polled by job_id or file_name.
+    """
+    if not file_name and not job_id:
+        raise HTTPException(status_code=400, detail="Must provide file_name or job_id")
         
-        # Read content
-        with open(input_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-
-        # Load global settings for config (can be overridden by forms later if needed)
-        record = settings_table.get(doc_id=1)
-        config = PipelineConfig(**(record or GlobalSettings().model_dump()))
-
-        # Queue background task
-        background_tasks.add_task(_run_pipeline_background, safe_filename, content, config, webhook_url)
-
+    q = Query()
+    record = None
+    
+    # 1. Try to find existing job
+    if job_id:
+        record = db.get(q.id == job_id)
+    elif file_name:
+        # Get the most recent job for this file_name
+        records = db.search(q.filename == file_name)
+        if records:
+            # Sort by timestamp descending
+            records.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            record = records[0]
+            
+    # 2. Return existing job status if it's in progress or completed
+    if record and record.get("status") in ["in progress", "completed"]:
         return {
-            "status": "queued",
-            "message": f"Document {safe_filename} successfully queued for processing.",
-            "filename": safe_filename,
-            "webhook_url": webhook_url
+            "job_id": record["id"],
+            "file_name": record["filename"],
+            "status": record["status"],
+            "details": record.get("error") if record["status"] == "error" else None,
+            "audio_url": record.get("download_url") if record["status"] == "completed" else None
         }
+        
+    # 3. Start a new job if not found (or if previous failed)
+    if not file_name:
+        raise HTTPException(status_code=404, detail="Job not found and no file_name provided to start a new one.")
+        
+    source_path = INPUT_DOCS_DIR / file_name
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail=f"File {file_name} not found in shared folder (briefing_source).")
+        
+    try:
+        with open(source_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+            
+        record_cfg = settings_table.get(doc_id=1)
+        config = PipelineConfig(**(record_cfg or GlobalSettings().model_dump()))
 
+        new_job_id = str(uuid.uuid4())
+        
+        initial_record = {
+            "id": new_job_id,
+            "transaction_id": new_job_id,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "in progress",
+            "filename": file_name,
+            "start_time": time.time()
+        }
+        db.insert(initial_record)
+        
+        # Spawn background task. No webhook for this specific endpoint design.
+        background_tasks.add_task(_run_pipeline_background, new_job_id, file_name, content, config, None)
+        
+        return {
+            "job_id": new_job_id,
+            "file_name": file_name,
+            "status": "in progress",
+            "details": "Job started successfully."
+        }
     except Exception as e:
+        logger.error(f"Error starting get_audio job for {file_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
 

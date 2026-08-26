@@ -9,6 +9,7 @@ if [ ! -d ".venv" ]; then
 
     echo "Installing the required language version internally..."
     uv python pin 3.12
+    uv sync
 else
     echo "Virtual environment already exists. Skipping creation."
 fi
