@@ -49,41 +49,47 @@ class DocumentState(TypedDict):
     audio_metrics: Dict[str, Any]
 
 
-async def summarize_node(state: DocumentState) -> dict:
-    config = state.get("pipeline_config", {})
-    provider = config.get("summary_provider", "local")
-    text_model = config.get("summary_model", "llama3.1")
+from src.models import FinancialReportExtraction
 
-    logger.info(
-        f"[Summarize Node] Executing via {provider.upper()} | Model: '{text_model}'"
-    )
+async def summarize_node(state: DocumentState) -> dict:
+    """Stage 1: Extraction Node"""
+    config = state.get("pipeline_config", {})
+    provider = config.get("summary_provider", "cloud")
+    text_model = config.get("summary_model", "gemini-2.5-flash")
+
+    logger.info(f"[Extraction Node] Executing via google-genai | Model: '{text_model}'")
     t0 = time.time()
 
-    llm = get_llm(provider, text_model)
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", get_prompt("summarize_document")), ("human", "{text}")]
+    client = genai.Client()
+    system_instruction = """You are an expert Financial Analyst and Corporate Intelligence Agent. Your role is to ingest, extract, and summarize corporate financial disclosures, quarterly/annual reports, mutual fund results, corporate actions, and investor briefing presentations.
+
+CORE OBJECTIVES:
+1. Identify Document Class: Determine if the document is (A) Corporate Financial Statement, (B) Asset Management / Multi-Fund Report, (C) Corporate Action / Dividend / Book Closure Notice, or (D) Corporate Briefing / Investor Deck.
+2. Maintain Extreme Numerical Precision: Verify and report the base currency and unit scale (e.g., PKR in '000, PKR in Millions). Never extrapolate or round without stating the exact reported number.
+3. Zero-Hallucination Policy: Extract only figures and decisions explicitly mentioned. If an item is "NIL", record it as NIL."""
+
+    # Using the google-genai SDK to enforce structured output via response_schema
+    response = await client.aio.models.generate_content(
+        model=text_model,
+        contents=state["raw_text"],
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            response_mime_type="application/json",
+            response_schema=FinancialReportExtraction,
+            temperature=0.0
+        )
     )
-    input_text = state["raw_text"]
-    response = await (prompt | llm).ainvoke({"text": input_text})
 
     t1 = time.time()
-    logger.info(f"[Summarize Node] Completed in {t1 - t0:.2f}s")
-
-    output_content = response.content.strip()
-
-    # Fallback token estimation for local models if usage_metadata is missing
-    usage = response.usage_metadata or {}
-    if not usage or usage.get("total_tokens", 0) == 0:
-        in_tok = len(input_text) // 4
-        out_tok = len(output_content) // 4
-        usage = {
-            "input_tokens": in_tok,
-            "output_tokens": out_tok,
-            "total_tokens": in_tok + out_tok,
-        }
+    logger.info(f"[Extraction Node] Completed in {t1 - t0:.2f}s")
+    
+    extracted_json = response.text
+    
+    # Fallback usage
+    usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     return {
-        "english_summary": output_content,
+        "english_summary": extracted_json,
         "summary_metrics": {
             "usage": usage,
             "provider": provider,
@@ -93,40 +99,47 @@ async def summarize_node(state: DocumentState) -> dict:
 
 
 async def translate_node(state: DocumentState) -> dict:
+    """Stage 2: Scripting Node"""
     config = state.get("pipeline_config", {})
-    provider = config.get("translation_provider", "local")
-    text_model = config.get("translation_model", "qwen2.5")
+    provider = config.get("translation_provider", "cloud")
+    text_model = config.get("translation_model", "gemini-2.5-flash")
 
-    logger.info(
-        f"[Translate Node] Executing via {provider.upper()} | Model: '{text_model}'"
-    )
+    logger.info(f"[Scripting Node] Executing via google-genai | Model: '{text_model}'")
     t0 = time.time()
 
-    llm = get_llm(provider, text_model)
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", get_prompt("translate_to_urdu")), ("human", "{summary}")]
+    client = genai.Client()
+    
+    scripting_prompt = f"""You are a financial broadcast scriptwriter.
+Given the following extracted financial JSON payload, generate a single-paragraph, broadcast-ready audio script in Urdu (written in Urdu script).
+
+CRITICAL CONSTRAINTS:
+1. The script MUST be strictly capped at 90 words to fit a 30-second TTS read at 1.3x speed.
+2. Route the extracted JSON payload to the matching Markdown template (A, B, C, or D) conceptually based on the document_classification.
+3. Spell out ALL financial acronyms (e.g., PSX, SECP, FBR) phonetically in Urdu for seamless text-to-speech generation.
+4. Output ONLY the Urdu script paragraph. No preamble, no english text.
+
+JSON Payload:
+{state['english_summary']}
+"""
+
+    response = await client.aio.models.generate_content(
+        model=text_model,
+        contents=scripting_prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.2
+        )
     )
-    input_summary = state["english_summary"]
-    response = await (prompt | llm).ainvoke({"summary": input_summary})
 
     t1 = time.time()
-    logger.info(f"[Translate Node] Completed in {t1 - t0:.2f}s")
-
-    output_content = response.content.strip()
-
-    # Fallback token estimation for local models if usage_metadata is missing
-    usage = response.usage_metadata or {}
-    if not usage or usage.get("total_tokens", 0) == 0:
-        in_tok = len(input_summary) // 4
-        out_tok = len(output_content) // 4
-        usage = {
-            "input_tokens": in_tok,
-            "output_tokens": out_tok,
-            "total_tokens": in_tok + out_tok,
-        }
+    logger.info(f"[Scripting Node] Completed in {t1 - t0:.2f}s")
+    
+    urdu_script = response.text.strip()
+    
+    # Fallback usage
+    usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     return {
-        "urdu_summary": output_content,
+        "urdu_summary": urdu_script,
         "translation_metrics": {
             "usage": usage,
             "provider": provider,

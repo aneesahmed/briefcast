@@ -1,6 +1,7 @@
 # src/models.py
 import os
 from pydantic import BaseModel
+from typing import List, Optional
 
 
 class PipelineConfig(BaseModel):
@@ -37,3 +38,23 @@ class GlobalSettings(BaseModel):
     audio_model: str = os.getenv(
         "DEFAULT_AUDIO_MODEL", "facebook/mms-tts-urd-script_arabic"
     )
+
+class FinancialMetric(BaseModel):
+    metric_name: str
+    current_period_value: str
+    comparative_period_value: str
+    variance_percentage: Optional[str]
+
+class CorporateAction(BaseModel):
+    event_type: str
+    dividend_per_share: Optional[str]
+    book_closure_start: Optional[str]
+    book_closure_end: Optional[str]
+
+class FinancialReportExtraction(BaseModel):
+    document_classification: str 
+    company_name: str
+    reporting_period: str
+    currency_scale: str
+    key_metrics: List[FinancialMetric]
+    corporate_actions: Optional[CorporateAction]
