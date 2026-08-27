@@ -6,15 +6,15 @@ build-backend = "hatchling.build"
 name = "briefcast"
 version = "0.1.0"
 description = "Stateful document processing orchestration with Gemini LLM/TTS APIs for Urdu audio broadcasts"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "langgraph>=0.1.8,<1.0.0",
-    "langchain-core>=0.2.10,<1.0.0",
-    "google-genai>=0.1.2,<1.0.0",
-    "langchain-google-genai>=1.0.8,<2.0.0",
+    "langchain-core>=1.4.0,<2.0.0",
+    "google-genai>=1.65.0,<3.0.0",
+    "langchain-google-genai>=4.0.0,<5.0.0",
     "fastapi>=0.111.0,<1.0.0",
     "uvicorn>=0.30.1,<1.0.0",
-    "websockets>=12.0,<13.0.0",
+    "websockets>=13.0,<16.0.0",
     "pypdf>=4.0.0,<5.0.0",
     "python-docx>=1.1.0,<2.0.0",
     "pyyaml>=6.0.1,<7.0.0",
@@ -28,6 +28,8 @@ dependencies = [
     "transformers>=5.14.1,<6.0.0",
     "torch>=2.13.0,<3.0.0",
     "scipy>=1.18.0,<2.0.0",
+    "pandas>=2.2.0,<4.0.0",
+    "xlrd>=2.0.1,<3.0.0",
     "pandas-stubs~=3.0.5",
 ]
 

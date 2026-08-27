@@ -139,6 +139,25 @@ class StockRegistry:
         return self.records.get(symbol.strip())
 
 
+def get_callname(company_or_symbol: str, db_file: str = DEFAULT_DB_PATH) -> str:
+    """Return a stored callname for a symbol/company, or compute a safe fallback."""
+    query = company_or_symbol.strip()
+    if not query:
+        return ""
+
+    registry = StockRegistry(filepath=db_file)
+    symbol_match = registry.get(query)
+    if symbol_match:
+        return symbol_match.callname
+
+    normalized_query = query.casefold()
+    for record in registry.records.values():
+        if record.company.casefold() == normalized_query:
+            return record.callname
+
+    return compute_callname(query)
+
+
 def cleanup_old_files(current_file_path: str):
     """Deletes older PSX history .xls files from the assets directory."""
     search_pattern = os.path.join(ASSETS_DIR, "indhist_*.xls")
