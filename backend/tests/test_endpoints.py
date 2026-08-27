@@ -32,3 +32,15 @@ def test_upload_documents(tmp_path):
     data = response.json()
     assert "Successfully uploaded" in data["message"]
     assert "test_doc.txt" in data["filenames"]
+
+
+def test_upload_openapi_uses_binary_file_picker():
+    schema = client.get("/openapi.json").json()
+    upload_schema = schema["components"]["schemas"][
+        "Body_upload_documents_api_upload_docs_post"
+    ]
+    file_items = upload_schema["properties"]["files"]["items"]
+
+    assert file_items["type"] == "string"
+    assert file_items["format"] == "binary"
+    assert "contentMediaType" not in file_items

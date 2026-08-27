@@ -99,7 +99,7 @@ def _empty_phase_telemetry(provider: str = None, model: str = None) -> Dict[str,
 
 @router.get("/", tags=["Health"])
 async def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "Briefcast API"}
 
 
 
@@ -141,7 +141,10 @@ async def upload_documents(files: List[UploadFile] = File(...)):
             saved_files.append(safe_filename)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
-    return {"message": f"Successfully uploaded {len(saved_files)} file(s)."}
+    return {
+        "message": f"Successfully uploaded {len(saved_files)} file(s).",
+        "filenames": saved_files,
+    }
 
 
 # ==========================================
@@ -183,8 +186,20 @@ async def step_summary(payload: Dict[str, Any] = Body(...)):
     if not input_file.exists():
         raise HTTPException(status_code=404, detail=f"Input file {filename} not found.")
 
-    with open(input_file, "r", encoding="utf-8") as f:
-        raw_text = f.read()
+    try:
+        raw_text = await asyncio.to_thread(DocumentService.read_file, input_file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Could not extract text from {filename}: {exc}"
+        ) from exc
+
+    if not raw_text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail=f"No readable text was found in {filename}.",
+        )
 
     state = {
         "raw_text": raw_text,
