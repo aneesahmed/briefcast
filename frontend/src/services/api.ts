@@ -1,13 +1,37 @@
-import type { GlobalSettings, ProcessResult } from '../types';
+import type { DashboardData, GlobalSettings, ProcessedRecord, ProcessResult, PublicConfig, RecordSearchFilters, ScannerStatus, SourceInventory } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// FastAPI serves this compiled UI, so all API and audio requests use the same origin.
+const API_BASE_URL = '';
 
 export const api = {
+  getAppConfig: async (): Promise<PublicConfig> => {
+    const res = await fetch(`${API_BASE_URL}/api/config`);
+    if (!res.ok) throw new Error('Failed to load application configuration');
+    return res.json();
+  },
+
   getHistory: async (): Promise<ProcessResult[]> => {
     const res = await fetch(`${API_BASE_URL}/api/history`);
     if (!res.ok) throw new Error('Failed to fetch history');
     const data = await res.json();
     return data.history || [];
+  },
+
+  getDashboard: async (): Promise<DashboardData> => {
+    const res = await fetch(`${API_BASE_URL}/api/dashboard`);
+    if (!res.ok) throw new Error('Failed to load dashboard');
+    return res.json();
+  },
+
+  searchRecords: async (filters: RecordSearchFilters = {}): Promise<ProcessedRecord[]> => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') query.set(key, String(value));
+    });
+    const res = await fetch(`${API_BASE_URL}/api/records?${query.toString()}`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    return data.records || [];
   },
 
   getSettings: async (): Promise<GlobalSettings> => {
@@ -16,13 +40,47 @@ export const api = {
     return res.json();
   },
 
-  uploadDocs: async (files: FileList): Promise<{ message: string }> => {
+  uploadDocs: async (files: FileList): Promise<{ message: string; filenames: string[] }> => {
     const formData = new FormData();
     for (let i = 0; i < files.length; i++) {
       formData.append('files', files[i]);
     }
     const res = await fetch(`${API_BASE_URL}/api/upload-docs`, { method: 'POST', body: formData });
     if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
+    return res.json();
+  },
+
+  getSourceFiles: async (): Promise<SourceInventory> => {
+    const res = await fetch(`${API_BASE_URL}/api/source-files`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  scanSourceFolder: async (): Promise<{ message: string; files: SourceInventory['files'] }> => {
+    const res = await fetch(`${API_BASE_URL}/api/scanner/scan`, { method: 'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  getScannerStatus: async (): Promise<ScannerStatus> => {
+    const res = await fetch(`${API_BASE_URL}/api/scanner/status`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  startScanner: async (config: any): Promise<ScannerStatus> => {
+    const res = await fetch(`${API_BASE_URL}/api/scanner/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  stopScanner: async (): Promise<ScannerStatus> => {
+    const res = await fetch(`${API_BASE_URL}/api/scanner/stop`, { method: 'POST' });
+    if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
 

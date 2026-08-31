@@ -1,16 +1,17 @@
-import os
 from pydantic import BaseModel
 
+from src.core.config import DEFAULT_SPEECH_SPEED, DEFAULT_SPEECH_TONE, DEFAULT_VOICE_GENDER, SUMMARY_MODEL
+
 class AudioConfig(BaseModel):
-    gender: str = os.getenv("DEFAULT_VOICE_GENDER", "Female")
-    speed: str = os.getenv("DEFAULT_SPEECH_SPEED", "1.0")
-    tone: str = os.getenv("DEFAULT_SPEECH_TONE", "Announcement")
+    gender: str = DEFAULT_VOICE_GENDER
+    speed: str = DEFAULT_SPEECH_SPEED
+    tone: str = DEFAULT_SPEECH_TONE
 
 class EstimateRequest(BaseModel):
     text: str
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = SUMMARY_MODEL
     expected_output_tokens: int = 50
 
 class ProcessTextRequest(BaseModel):
     text: str
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = SUMMARY_MODEL

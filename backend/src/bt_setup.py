@@ -206,7 +206,7 @@ def ensure_ready(mac, expected_channel=None, auto_pair=True):
     return ok
 
 
-def _cli():
+def cli():
     ap = argparse.ArgumentParser(description="Check/fix Bluetooth HFP readiness for btdial.py")
     ap.add_argument("mac", help="phone's Bluetooth MAC address")
     ap.add_argument("--channel", type=int, default=None, help="expected RFCOMM channel")
@@ -219,4 +219,4 @@ def _cli():
 
 
 if __name__ == "__main__":
-    _cli()
+    cli()

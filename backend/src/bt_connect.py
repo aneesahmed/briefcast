@@ -34,7 +34,7 @@ ADAPTER = os.environ.get("BT_ADAPTER", "hci0")
 RETRIES = int(os.environ.get("BT_CONNECT_RETRIES", "3"))
 
 
-def _dev_path(mac: str) -> str:
+def dev_path(mac: str) -> str:
     """BlueZ object path for a device MAC."""
     return f"/org/bluez/{ADAPTER}/dev_" + mac.replace(":", "_")
 
@@ -49,7 +49,7 @@ def connect_dbus(mac: str) -> bool:
         return False  # signal caller to use CLI fallback
 
     bus = dbus.SystemBus()
-    path = _dev_path(mac)
+    path = dev_path(mac)
     try:
         dev = dbus.Interface(
             bus.get_object("org.bluez", path), "org.bluez.Device1"

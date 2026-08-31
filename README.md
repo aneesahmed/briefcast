@@ -1,6 +1,6 @@
 # Briefcast
 
-Briefcast is an orchestration system for processing documents and generating Urdu TTS audio broadcasts using Gemini LLM/TTS APIs. It consists of a FastAPI backend using LangGraph, and a React (Vite) frontend.
+Briefcast automatically processes documents into an English summary, Urdu translation, and MP3 broadcast using Gemini. FastAPI serves both the API and the compiled React dashboard from one port.
 
 ## Project Structure
 - `backend/`: FastAPI application managing the orchestration pipeline, AI models, and document processing.
@@ -21,9 +21,22 @@ You can spin up the entire application using Docker Compose.
    ```bash
    docker-compose up --build
    ```
-4. Access the frontend at `http://localhost:80` and backend API at `http://localhost:8000`.
+4. Open the dashboard at `http://localhost:8000` or Swagger at `http://localhost:8000/docs`.
 
-### Local Development Setup
-Refer to the individual service READMEs for local development setup:
-- [Backend README](backend/README.md)
-- [Frontend README](frontend/README.md)
+### Local setup
+
+Build the dashboard once, then run the complete application with Uvicorn:
+
+```powershell
+cd frontend
+npm install
+npm run build
+
+cd ../backend
+Copy-Item .env.example .env
+# Add GEMINI_API_KEY to backend/.env
+uv sync
+uv run python -m src.main
+```
+
+Only rebuild the frontend after changing React code; no separate React server is required.

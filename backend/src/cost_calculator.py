@@ -4,33 +4,20 @@ import re
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from google import genai
+from src.core.config import MODEL_PRICING, SUMMARY_MODEL, USD_TO_PKR_FALLBACK
 
 load_dotenv()
 
 
 class CostCalculator:
     def __init__(self):
-        # Reads dynamic rates directly from .env
-        self.usd_to_pkr = self._get_env_float("USD_TO_PKR", default=278.0)
-
-        # Dynamic pricing map (USD per 1,000,000 tokens)
+        self.usd_to_pkr = USD_TO_PKR_FALLBACK
         self.pricing_map = {
-            "gemini-2.5-flash": {
-                "input_per_1m": self._get_env_float(
-                    "GEMINI_2_5_FLASH_INPUT_PER_1M", default=0.30
-                ),
-                "output_per_1m": self._get_env_float(
-                    "GEMINI_2_5_FLASH_OUTPUT_PER_1M", default=2.50
-                ),
-            },
-            "gemini-2.5-flash-preview-tts": {
-                "input_per_1m": self._get_env_float(
-                    "GEMINI_2_5_FLASH_TTS_INPUT_PER_1M", default=0.50
-                ),
-                "output_per_1m": self._get_env_float(
-                    "GEMINI_2_5_FLASH_TTS_OUTPUT_PER_1M", default=10.00
-                ),
-            },
+            model: {
+                "input_per_1m": prices["input_per_million"],
+                "output_per_1m": prices["output_per_million"],
+            }
+            for model, prices in MODEL_PRICING.items()
         }
 
         if os.getenv("GEMINI_API_KEY"):
@@ -43,20 +30,9 @@ class CostCalculator:
                 self.client = None
         else:
             print(
-                "[CostCalculator] Notice: GEMINI_API_KEY not found. Operating in offline/local mode using token heuristics."
+                "[CostCalculator] Notice: GEMINI_API_KEY not found. Using token heuristics."
             )
             self.client = None
-
-    @staticmethod
-    def _get_env_float(var_name: str, default: float) -> float:
-        """Safely parses float variables from .env environment."""
-        val = os.getenv(var_name)
-        if val is None:
-            return default
-        try:
-            return float(val)
-        except ValueError:
-            return default
 
     def count_words(self, text: str) -> int:
         if not text:
@@ -66,7 +42,7 @@ class CostCalculator:
     def count_characters(self, text: str) -> int:
         return len(text) if text else 0
 
-    def get_exact_tokens(self, text: str, model_name: str = "gemini-2.5-flash") -> int:
+    def get_exact_tokens(self, text: str, model_name: str = SUMMARY_MODEL) -> int:
         if not text.strip():
             return 0
         try:
@@ -83,7 +59,7 @@ class CostCalculator:
     def calculate_cost_and_metrics(
         self,
         text: str,
-        model_name: str = "gemini-2.5-flash",
+        model_name: str = SUMMARY_MODEL,
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
@@ -99,9 +75,7 @@ class CostCalculator:
         exact_output_tokens = output_tokens if output_tokens is not None else 0
 
         # Fetch the pricing for the specific model, default to standard flash rates if unknown
-        pricing = self.pricing_map.get(
-            model_name, {"input_per_1m": 0.30, "output_per_1m": 2.50}
-        )
+        pricing = self.pricing_map.get(model_name, self.pricing_map[SUMMARY_MODEL])
 
         input_cost_usd = (exact_input_tokens / 1_000_000) * pricing["input_per_1m"]
         output_cost_usd = (exact_output_tokens / 1_000_000) * pricing["output_per_1m"]

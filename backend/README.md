@@ -3,7 +3,8 @@
 This is the FastAPI backend for the Briefcast system. It uses LangGraph to orchestrate stateful document summarization, translation to Urdu, and TTS generation.
 
 ## Requirements
-- Python 3.12+
+- Python 3.12
+- Node.js (only to compile the dashboard)
 - [uv](https://github.com/astral-sh/uv) (for dependency management)
 
 ## Setup
@@ -11,23 +12,30 @@ This is the FastAPI backend for the Briefcast system. It uses LangGraph to orche
    ```bash
    cp .env.example .env
    ```
-   Add your `GEMINI_API_KEY` and other necessary credentials.
+   Add your `GEMINI_API_KEY`.
 
 2. Install dependencies using `uv`:
    ```bash
-   uv venv
-   # Windows: .venv\Scripts\activate
-   # Linux/Mac: source .venv/bin/activate
-   uv pip install -r pyproject.toml
+   uv sync
    ```
 
-3. Run the development server:
+3. Build the dashboard from the project root:
    ```bash
-   uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+   cd ../frontend
+   npm install
+   npm run build
+   cd ../backend
    ```
+
+4. Run the complete application:
+   ```bash
+   uv run python -m src.main
+   ```
+
+The dashboard is available at `http://localhost:8000`; the API documentation is at `/docs`.
 
 ## Running Tests
 Run the test suite with:
 ```bash
-bash run_tests.sh
+uv run pytest
 ```

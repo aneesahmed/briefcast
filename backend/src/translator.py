@@ -3,6 +3,7 @@ import os
 from google import genai
 from dotenv import load_dotenv
 from prompts import get_newscaster_prompt
+from src.core.config import TRANSLATION_MODEL
 
 load_dotenv()
 client = genai.Client()
@@ -18,11 +19,11 @@ def get_or_create_urdu_translation() -> str:
         with open(TRANSCRIPT_FILE, "r", encoding="utf-8") as f:
             return f.read()
 
-    print("-> No translation file found. Translating via Gemini-2.5-flash...")
+    print(f"-> No translation file found. Translating via {TRANSLATION_MODEL}...")
     english_transcript = get_newscaster_prompt()
 
     translation_response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=TRANSLATION_MODEL,
         contents=f"Translate the following transcript into natural, conversational Urdu. Provide ONLY the Urdu text, without any English translation notes or markdown formatting:\n\n{english_transcript}"
     )
 

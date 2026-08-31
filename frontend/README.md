@@ -4,23 +4,14 @@ This is the React + Vite frontend for the Briefcast system.
 
 ## Setup
 1. Ensure Node.js (v18+) is installed.
-2. Copy the environment variables template:
-   ```bash
-   cp .env.example .env.local
-   ```
-   *Note: Ensure `VITE_API_BASE_URL` points to your running backend (defaults to http://localhost:8000).*
-
-3. Install dependencies:
+2. Install dependencies:
    ```bash
    npm install
    ```
 
-4. Start the development server:
-   ```bash
-   npm run dev
-   ```
-
-5. Build for production:
+3. Build the dashboard:
    ```bash
    npm run build
    ```
+
+FastAPI serves the generated `dist` directory on the same port as the API. A separate React server and frontend environment variables are not required.

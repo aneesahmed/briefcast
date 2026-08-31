@@ -1,25 +1,14 @@
-version: '3.8'
-
 services:
-  backend:
+  briefcast:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/input_docs:/app/input_docs
-      - ./backend/processed_docs:/app/processed_docs
+      - ./briefing_source:/app/briefing_source
+      - ./processed_files:/app/processed_files
+      - ./failed_files:/app/failed_files
     env_file:
       - ./backend/.env
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
     restart: unless-stopped
