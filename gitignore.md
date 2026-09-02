@@ -1,32 +1,34 @@
-=========================
-Operating System Files
-=========================
+# =========================
+# Operating System Files
+# =========================
 .DS_Store
 Thumbs.db
-=========================
-IDEs & Editors
-=========================
+
+# =========================
+# IDEs & Editors
+# =========================
 .idea/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
-!.vscode/.claude
+!.vscode/*.claude*
 !.claude.json
 !.clinerules
 !.clauderc
-=========================
-Backend (Python / FastAPI / uv)
-=========================
-pycache/
+
+# =========================
+# Backend (Python / FastAPI / uv)
+# =========================
+__pycache__/
 *.py[cod]
-$py.class
+*$py.class
 .venv/
 venv/
 env/
 .env
-.env.
+.env.*
 !.env.example
 !.env_example
 .uv.cache/
@@ -34,9 +36,10 @@ env/
 !package.json
 !package-lock.json
 !tsconfig.json
-=========================
-Frontend (React / npm)
-=========================
+
+# =========================
+# Frontend (React / npm)
+# =========================
 node_modules/
 build/
 dist/
@@ -44,9 +47,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .eslintcache
-=========================
-User and Generated Data
-=========================
+
+# =========================
+# User and Generated Data
+# =========================
 briefing_source/*
 !briefing_source/.gitkeep
 processing_files/*
@@ -61,12 +65,13 @@ backend/processed_docs/*
 !backend/processed_docs/.gitkeep
 backend/output_audio/*
 !backend/output_audio/.gitkeep
-Temp / Audio / Scratch files
-.wav
-.raw
-backend/assets/.wav
+
+# Temp / Audio / Scratch files
+*.wav
+*.raw
+backend/assets/*.wav
 briefcast_db.json
-!.env.example
+!*.env.example
 !tsconfig.*.json
 scratch/
 testing data/

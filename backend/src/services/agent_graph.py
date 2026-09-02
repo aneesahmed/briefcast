@@ -31,6 +31,13 @@ from src.core.config import (
     SUMMARY_MAX_WORDS,
     SUMMARY_MODEL,
     TRANSLATION_MODEL,
+    TEST_MODE,
+)
+from src.services.dummy_provider import (
+    run_dummy_extraction,
+    run_dummy_drafting,
+    run_dummy_translation,
+    run_dummy_audio,
 )
 
 load_dotenv()
@@ -64,6 +71,9 @@ def limit_words(text: str, maximum: int = SUMMARY_MAX_WORDS) -> str:
 # 2. Node: Extract Financials (Structured Output)
 def extraction_node(state: BriefcastState):
     """Bypasses text generation and forces Gemini to output a strict JSON dict."""
+    if TEST_MODE:
+        return run_dummy_extraction()
+
     # Note: Import your Pydantic schema here (e.g., FinancialReportExtraction)
     from src.models import FinancialReportExtraction
 
@@ -90,11 +100,13 @@ def extraction_node(state: BriefcastState):
 # 3. Node: Draft English Announcement
 def drafting_node(state: BriefcastState):
     """Generates the initial 30-second English broadcast script."""
+    if TEST_MODE:
+        return run_dummy_drafting()
+
     data_context = state["extracted_data"]
     maximum_words = int(
         state.get("pipeline_config", {}).get("summary_max_words", SUMMARY_MAX_WORDS)
     )
-
     prompt = f"""
     You are a financial news broadcaster. Using the following JSON data, write a 
     single-paragraph financial broadcast announcement with a strict maximum of {maximum_words} words.
@@ -125,6 +137,20 @@ def name_replacement_node(state: BriefcastState):
         # Apply the regex substitution from the text_formatters utility
         updated_script = inject_callname(current_script, original_name, callname)
 
+
+# 4. Node: Find & Replace Callname
+def name_replacement_node(state: BriefcastState):
+    """Intercepts the English script and swaps the formal name for the callname."""
+    original_name = state.get("extracted_name", "")
+    current_script = state.get("english_script", "")
+
+    if original_name:
+        # Get the callname from your working pickle loader
+        callname = get_callname(original_name)
+
+        # Apply the regex substitution from the text_formatters utility
+        updated_script = inject_callname(current_script, original_name, callname)
+
         return {"english_script": updated_script}
 
     return {"english_script": current_script}
@@ -133,6 +159,9 @@ def name_replacement_node(state: BriefcastState):
 # 5. Node: Translate to Urdu
 def translation_node(state: BriefcastState):
     """Translates the perfectly formatted English script into Urdu."""
+    if TEST_MODE:
+        return run_dummy_translation()
+
     prompt = f"""
     Translate the following financial broadcast script into formal, natural-sounding Urdu.
     Maintain the precise numerical values and the exact company name.
@@ -210,8 +239,8 @@ async def summarize_node(state: DocumentState) -> dict:
         "english_summary": result["english_script"],
         "summary_metrics": {
             "duration_seconds": round(time.time() - started, 2),
-            "provider": "cloud",
-            "model": config.get("summary_model", SUMMARY_MODEL),
+            "provider": "dummy" if TEST_MODE else "cloud",
+            "model": "dummy-summary" if TEST_MODE else config.get("summary_model", SUMMARY_MODEL),
             "usage": {},
             "extracted_data": result["extracted_data"],
             "extracted_name": result["extracted_name"],
@@ -240,8 +269,8 @@ async def translate_node(state: DocumentState) -> dict:
         "urdu_summary": urdu_script,
         "translation_metrics": {
             "duration_seconds": round(time.time() - started, 2),
-            "provider": "cloud",
-            "model": config.get("translation_model", TRANSLATION_MODEL),
+            "provider": "dummy" if TEST_MODE else "cloud",
+            "model": "dummy-translation" if TEST_MODE else config.get("translation_model", TRANSLATION_MODEL),
             "usage": {},
         },
     }
@@ -260,10 +289,13 @@ def write_mp3(pcm_bytes: bytes, output_file: Path, sample_rate: int) -> None:
 
 async def generate_audio_node(state: DocumentState) -> dict:
     """Generate the final MP3 using the configured online Gemini TTS model."""
+    output_file = Path(state["output_dir"]) / state["audio_path"]
+    if TEST_MODE:
+        return run_dummy_audio(output_file, state["audio_path"])
+
     config = state.get("pipeline_config", {})
     provider = config.get("audio_provider", AUDIO_PROVIDER)
     audio_model = config.get("audio_model", AUDIO_MODEL)
-    output_file = Path(state["output_dir"]) / state["audio_path"]
     urdu_text = state["urdu_summary"]
     started = time.time()
 

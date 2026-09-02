@@ -23,6 +23,13 @@ export const api = {
     return res.json();
   },
 
+  getLogs: async (lines: number = 100): Promise<string[]> => {
+    const res = await fetch(`${API_BASE_URL}/api/logs?lines=${lines}`);
+    if (!res.ok) throw new Error('Failed to load logs');
+    const data = await res.json();
+    return data.logs || [];
+  },
+
   searchRecords: async (filters: RecordSearchFilters = {}): Promise<ProcessedRecord[]> => {
     const query = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {

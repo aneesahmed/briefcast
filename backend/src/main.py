@@ -18,14 +18,30 @@ from src.api.routes import (
     start_folder_scanner,
 )
 from src.core.config import (
+    APP_MODE,
     FRONTEND_DIST_DIR,
     SERVER_HOST,
     SERVER_PORT,
     SERVER_RELOAD,
+    LOG_FILE_PATH,
 )
 
 load_dotenv()
+
+# Configure logging to write to both console and file
+file_handler = logging.FileHandler(LOG_FILE_PATH, encoding="utf-8")
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
 logger = logging.getLogger("uvicorn.error")
+logger.addHandler(file_handler)
+
+if APP_MODE == "live":
+    print("WARNING: Starting in LIVE mode. Real API calls will be made, incurring costs.")
+    try:
+        input("Press Enter to continue or Ctrl+C to cancel...")
+    except KeyboardInterrupt:
+        print("\nStartup cancelled.")
+        exit(1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

@@ -20,39 +20,41 @@ const date = (value?: string | null) => value
 export default function Dashboard() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [appConfig, setAppConfig] = useState<PublicConfig | null>(null);
-  const [records, setRecords] = useState<ProcessedRecord[]>([]);
-  const [filters, setFilters] = useState<RecordSearchFilters>({ status: 'completed' });
+  const [logs, setLogs] = useState<string[]>([]);
   const [files, setFiles] = useState<FileList | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const picker = useRef<HTMLInputElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setDashboard(await api.getDashboard());
+      const [dashData, logsData] = await Promise.all([
+        api.getDashboard(),
+        api.getLogs(100)
+      ]);
+      setDashboard(dashData);
+      setLogs(logsData);
       setError('');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Dashboard request failed');
     }
   }, []);
 
-  const runSearch = useCallback(async (criteria: RecordSearchFilters) => {
-    try {
-      setRecords(await api.searchRecords(criteria));
-      setError('');
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Search failed');
+  // Auto-scroll logs to bottom when they update
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, []);
+  }, [logs]);
 
   useEffect(() => {
     refresh();
-    runSearch({ status: 'completed' });
     api.getAppConfig().then(setAppConfig).catch(() => undefined);
     const timer = window.setInterval(refresh, 3000);
     return () => window.clearInterval(timer);
-  }, [refresh, runSearch]);
+  }, [refresh]);
 
   const upload = async () => {
     if (!files?.length) return;
@@ -86,9 +88,14 @@ export default function Dashboard() {
             <h1 style={{ margin: 0, color: '#0f172a', fontSize: '1.8rem' }}>Briefcast Operations</h1>
             <p style={{ margin: '.35rem 0 0', color: '#64748b' }}>Upload a document. Briefcast summarizes, translates, and creates Urdu audio automatically.</p>
           </div>
-          <span style={{ padding: '.45rem .75rem', borderRadius: 999, fontSize: '.8rem', fontWeight: 700, background: dashboard?.scanner.running ? '#dcfce7' : '#fef3c7', color: dashboard?.scanner.running ? '#166534' : '#92400e' }}>
-            {dashboard?.scanner.running ? `Scanner active · ${dashboard.scanner.interval_seconds}s` : 'Scanner paused'}
-          </span>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            <button onClick={refresh} style={{ padding: '.45rem .75rem', borderRadius: 999, border: '1px solid #cbd5e1', background: '#fff', color: '#0f172a', fontSize: '.8rem', fontWeight: 600, cursor: 'pointer' }}>
+              ↻ Refresh
+            </button>
+            <span style={{ padding: '.45rem .75rem', borderRadius: 999, fontSize: '.8rem', fontWeight: 700, background: dashboard?.scanner.running ? '#dcfce7' : '#fef3c7', color: dashboard?.scanner.running ? '#166534' : '#92400e' }}>
+              {dashboard?.scanner.running ? `Scanner active · ${dashboard.scanner.interval_seconds}s` : 'Scanner paused'}
+            </span>
+          </div>
         </div>
 
         {error && <div role="alert" style={{ marginBottom: '1rem', padding: '.8rem 1rem', background: '#fee2e2', color: '#991b1b', borderRadius: 8 }}>{error}</div>}
@@ -125,35 +132,51 @@ export default function Dashboard() {
             <h2 style={{ margin: '0 0 .75rem', fontSize: '1.05rem', color: '#0f172a' }}>Input folder</h2>
             {dashboard?.input_files.length ? dashboard.input_files.slice(0, 8).map(item => <div key={item.filename} style={{ padding: '.7rem 0', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
               <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.filename}</span>
-              <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>{size(item.size_bytes)} · {item.status}</span>
+              <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>{size(item.size_bytes)}</span>
             </div>) : <div style={{ color: '#94a3b8' }}>No files waiting in the input folder.</div>}
+          </div>
+          <div style={panel}>
+            <h2 style={{ margin: '0 0 .75rem', fontSize: '1.05rem', color: '#0f172a' }}>Processed folder</h2>
+            {dashboard?.processed_files.length ? dashboard.processed_files.slice(0, 8).map(item => <div key={item.filename} style={{ padding: '.7rem 0', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+              <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.filename}</span>
+              <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>{date(item.modified_at)}</span>
+            </div>) : <div style={{ color: '#94a3b8' }}>No processed files.</div>}
+          </div>
+          <div style={panel}>
+            <h2 style={{ margin: '0 0 .75rem', fontSize: '1.05rem', color: '#0f172a' }}>Failed folder</h2>
+            {dashboard?.failed_files.length ? dashboard.failed_files.slice(0, 8).map(item => <div key={item.filename} style={{ padding: '.7rem 0', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+              <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.filename}</span>
+              <span style={{ color: '#64748b', whiteSpace: 'nowrap' }}>{date(item.modified_at)}</span>
+            </div>) : <div style={{ color: '#94a3b8' }}>No failed files.</div>}
           </div>
         </section>
 
-        <section style={{ ...panel, marginBottom: '1rem' }}>
-          <h2 style={{ margin: '0 0 .85rem', fontSize: '1.1rem', color: '#0f172a' }}>Find processed broadcasts</h2>
-          <form onSubmit={event => { event.preventDefault(); runSearch(filters); }} style={{ display: 'grid', gridTemplateColumns: 'minmax(170px,1.4fr) minmax(100px,.7fr) repeat(2,minmax(135px,1fr)) minmax(110px,.7fr) auto', gap: '.6rem' }}>
-            <input aria-label="Name" placeholder="File or company name" value={filters.name || ''} onChange={e => setFilters({ ...filters, name: e.target.value })} style={field} />
-            <input aria-label="Symbol" placeholder="Symbol" value={filters.symbol || ''} onChange={e => setFilters({ ...filters, symbol: e.target.value })} style={field} />
-            <input aria-label="From date" type="date" value={filters.date_from || ''} onChange={e => setFilters({ ...filters, date_from: e.target.value })} style={field} />
-            <input aria-label="To date" type="date" value={filters.date_to || ''} onChange={e => setFilters({ ...filters, date_to: e.target.value })} style={field} />
-            <input aria-label="Last days" type="number" min="1" placeholder="Last N days" value={filters.last_n_days || ''} onChange={e => setFilters({ ...filters, last_n_days: e.target.value ? Number(e.target.value) : undefined })} style={field} />
-            <button type="submit" style={{ padding: '.65rem 1rem', border: 0, borderRadius: 7, background: '#0f172a', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Search</button>
-          </form>
+        <section style={{ ...panel, marginBottom: '2rem' }}>
+          <h2 style={{ margin: '0 0 .75rem', fontSize: '1.05rem', color: '#0f172a' }}>Server Logs</h2>
+          <div 
+            ref={logContainerRef}
+            style={{ 
+              background: '#1e293b', 
+              color: '#e2e8f0', 
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', 
+              fontSize: '.85rem', 
+              lineHeight: 1.5, 
+              padding: '1rem', 
+              borderRadius: 8,
+              height: 300,
+              overflowY: 'auto'
+            }}
+          >
+            {logs.length ? (
+              logs.map((line, i) => (
+                <div key={i} style={{ wordBreak: 'break-all' }}>{line}</div>
+              ))
+            ) : (
+              <div style={{ color: '#94a3b8' }}>No logs available yet...</div>
+            )}
+          </div>
         </section>
 
-        <section style={{ display: 'grid', gap: '1rem' }}>
-          {records.length ? records.map(record => <article key={record.job_id} style={panel}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', marginBottom: '.8rem' }}>
-              <div><h3 style={{ margin: 0, color: '#0f172a' }}>{record.filename}</h3><div style={{ marginTop: '.25rem', color: '#64748b', fontSize: '.8rem' }}>{[record.company_name, record.symbol, date(record.completed_at)].filter(Boolean).join(' · ')}</div></div>
-              <span style={{ color: record.status === 'completed' ? '#047857' : '#b91c1c', fontWeight: 700, textTransform: 'capitalize' }}>{record.status}</span>
-            </div>
-            {record.summary && <div style={{ marginBottom: '.8rem' }}><strong style={{ color: '#475569' }}>Summary</strong><p style={{ color: '#334155', lineHeight: 1.55, margin: '.3rem 0 0' }}>{record.summary}</p></div>}
-            {record.translation && <div style={{ marginBottom: '.8rem' }}><strong style={{ color: '#475569' }}>Urdu translation</strong><p dir="rtl" style={{ color: '#334155', lineHeight: 2, fontSize: '1.15rem', margin: '.3rem 0 0', textAlign: 'right' }}>{record.translation}</p></div>}
-            {record.audio_url && <audio controls preload="none" src={api.getAudioUrl(record.audio_url)} style={{ width: '100%' }} />}
-            {record.error && <div style={{ color: '#b91c1c' }}>{record.error}</div>}
-          </article>) : <div style={{ ...panel, color: '#94a3b8', textAlign: 'center' }}>No processed records match the search.</div>}
-        </section>
       </div>
     </main>
   );

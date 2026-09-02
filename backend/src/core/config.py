@@ -13,10 +13,13 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
 FRONTEND_DIST_DIR = PROJECT_DIR / "frontend" / "dist"
 BRIEFING_SOURCE_DIR = PROJECT_DIR / "briefing_source"
+PROCESSING_FILES_DIR = PROJECT_DIR / "processing_files"
 PROCESSED_FILES_DIR = PROJECT_DIR / "processed_files"
 FAILED_FILES_DIR = PROJECT_DIR / "failed_files"
 INPUT_DOCS_DIR = BRIEFING_SOURCE_DIR
+PROCESSING_DOCS_DIR = PROCESSING_FILES_DIR
 PROCESSED_DOCS_DIR = PROCESSED_FILES_DIR
+LOG_FILE_PATH = PROJECT_DIR / "briefcast.log"
 
 # Web server defaults. Command-line Uvicorn options can still override these
 # for one-off runs or deployment environments.
@@ -35,12 +38,12 @@ SUPPORTED_DOCUMENT_EXTENSIONS = (
 )
 DEFAULT_STAGED_FILENAME = "staged_doc.txt"
 SCANNER_ENABLED = True
-SCANNER_INTERVAL_SECONDS = 5.0
+SCANNER_INTERVAL_SECONDS = 10.0
 
 # Gemini text pipeline
 SUMMARY_PROVIDER = "cloud"
 SUMMARY_MODEL = "gemini-2.5-flash"
-SUMMARY_MAX_WORDS = 110
+SUMMARY_MAX_WORDS = 120
 TRANSLATION_PROVIDER = "cloud"
 TRANSLATION_MODEL = "gemini-2.5-flash"
 
@@ -78,6 +81,13 @@ MODEL_OPTIONS = {
 VOICE_GENDER_OPTIONS = tuple(GEMINI_VOICE_BY_GENDER)
 SPEECH_TONE_OPTIONS = ("Announcement", "Neutral")
 SPEECH_SPEED_OPTIONS = ("0.9", DEFAULT_SPEECH_SPEED, "1.3")
+
+import os
+
+# Testing configuration
+# If APP_MODE is 'test', bypasses real LLM calls and returns static dummy results.
+APP_MODE = os.getenv("APP_MODE", "test").lower()
+TEST_MODE = APP_MODE != "live"
 
 # Flat artifact naming
 SUMMARY_FILE_SUFFIX = "_summary.txt"
@@ -121,5 +131,5 @@ def public_config() -> dict:
     }
 
 
-for directory in (BRIEFING_SOURCE_DIR, PROCESSED_FILES_DIR, FAILED_FILES_DIR):
+for directory in (BRIEFING_SOURCE_DIR, PROCESSING_FILES_DIR, PROCESSED_FILES_DIR, FAILED_FILES_DIR):
     directory.mkdir(parents=True, exist_ok=True)
