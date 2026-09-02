@@ -132,4 +132,5 @@ def public_config() -> dict:
 
 
 for directory in (BRIEFING_SOURCE_DIR, PROCESSING_FILES_DIR, PROCESSED_FILES_DIR, FAILED_FILES_DIR):
-    directory.mkdir(parents=True, exist_ok=True)
+    if not directory.exists():
+        raise FileNotFoundError(f"Required directory not found: {directory}. Please create it manually before starting the server.")
