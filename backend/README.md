@@ -1,41 +1,77 @@
 # Briefcast Backend
 
-This is the FastAPI backend for the Briefcast system. It uses LangGraph to orchestrate stateful document summarization, translation to Urdu, and TTS generation.
+Briefcast is a folder-driven FastAPI service. It scans `briefing_source` every five seconds and processes supported TXT, PDF, and DOCX files sequentially.
 
-## Requirements
-- Python 3.12
-- Node.js (only to compile the dashboard)
-- [uv](https://github.com/astral-sh/uv) (for dependency management)
+For each source document, the service:
+
+1. Generates an English summary with Gemini.
+2. Translates the summary into Urdu with Gemini.
+3. Generates an Urdu MP3 with Gemini TTS.
+4. Moves the source and generated artifacts to `processed_files`.
+5. Moves the source and an error record to `failed_files` if processing fails.
 
 ## Setup
-1. Copy the environment variables template and configure it:
-   ```bash
-   cp .env.example .env
-   ```
-   Add your `GEMINI_API_KEY`.
 
-2. Install dependencies using `uv`:
-   ```bash
-   uv sync
-   ```
+The backend requires Python 3.12 and `uv`.
 
-3. Build the dashboard from the project root:
-   ```bash
-   cd ../frontend
-   npm install
-   npm run build
-   cd ../backend
-   ```
+```powershell
+cd C:\working\AI26\briefcast\backend
+Copy-Item .env.example .env
+uv sync
+```
 
-4. Run the complete application:
-   ```bash
-   uv run python -m src.main
-   ```
+Set only the Gemini secret in `.env`:
 
-The dashboard is available at `http://localhost:8000`; the API documentation is at `/docs`.
+```dotenv
+GEMINI_API_KEY=your_gemini_api_key
+```
 
-## Running Tests
-Run the test suite with:
-```bash
-uv run pytest
+Model names, the 120-word summary limit, scanner interval, server host, and server port are committed in `src/core/config.py`.
+
+## Run
+
+```powershell
+uv run python -m src.main
+```
+
+Swagger documentation is available at `http://localhost:8000/docs`.
+
+## Consumer API
+
+Get audio completed on a date:
+
+```http
+GET /api/audio/by-date?date=2026-09-03
+```
+
+Example response:
+
+```json
+{
+  "date": "2026-09-03",
+  "count": 1,
+  "items": [
+    {
+      "title": "Example Limited",
+      "audio_url": "http://localhost:8000/api/audio/example_audio.mp3"
+    }
+  ]
+}
+```
+
+The consumer can open `audio_url` to stream or download the MP3.
+
+Other operational endpoints:
+
+- `GET /api/health`
+- `POST /api/upload-docs`
+- `GET /api/scanner/status`
+- `POST /api/scanner/start`
+- `POST /api/scanner/stop`
+- `POST /api/scanner/scan`
+
+## Tests
+
+```powershell
+uv run python -m pytest -q
 ```

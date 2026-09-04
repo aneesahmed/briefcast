@@ -1,25 +1,14 @@
-import os
 import asyncio
+import json
+import os
 import time
-import warnings
 from functools import lru_cache
 from pathlib import Path
-from typing import TypedDict, Dict, Any
-from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+from typing import Any, TypedDict
 
-warnings.filterwarnings(
-    "ignore",
-    category=LangChainPendingDeprecationWarning,
-)
-
-from langgraph.graph import StateGraph, START, END
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
 
-# Import your existing scripts and the new formatter
-from scripts.name_calling import get_callname
-from src.services.text_formatters import inject_callname
 from src.core.config import (
     AUDIO_MODEL,
     AUDIO_PROVIDER,
@@ -31,175 +20,10 @@ from src.core.config import (
     SUMMARY_MAX_WORDS,
     SUMMARY_MODEL,
     TRANSLATION_MODEL,
-    TEST_MODE,
 )
-from src.services.dummy_provider import (
-    run_dummy_extraction,
-    run_dummy_drafting,
-    run_dummy_translation,
-    run_dummy_audio,
-)
-
-load_dotenv()
+from src.models import FinancialReportExtraction
 
 
-# 1. Define the Graph State
-class BriefcastState(TypedDict, total=False):
-    document_text: str  # Raw PDF text input
-    extracted_data: Dict[str, Any]  # Structured JSON from Gemini
-    extracted_name: str  # The formal company name/symbol found
-    english_script: str  # The generated English announcement
-    urdu_script: str  # The final translated script
-    pipeline_config: dict
-
-
-@lru_cache(maxsize=1)
-def get_gemini_client() -> genai.Client:
-    """Keep one Gemini client alive for sync and async pipeline requests."""
-    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-
-def model_from_state(state: BriefcastState, key: str, default: str) -> str:
-    return state.get("pipeline_config", {}).get(key, default)
-
-
-def limit_words(text: str, maximum: int = SUMMARY_MAX_WORDS) -> str:
-    words = text.strip().split()
-    return " ".join(words[:maximum])
-
-
-# 2. Node: Extract Financials (Structured Output)
-def extraction_node(state: BriefcastState):
-    """Bypasses text generation and forces Gemini to output a strict JSON dict."""
-    if TEST_MODE:
-        return run_dummy_extraction()
-
-    # Note: Import your Pydantic schema here (e.g., FinancialReportExtraction)
-    from src.models import FinancialReportExtraction
-
-    response = get_gemini_client().models.generate_content(
-        model=model_from_state(state, "summary_model", SUMMARY_MODEL),
-        contents=[
-            state["document_text"],
-            "Extract the company name, stock symbol when present, financial results, and corporate actions from this document."
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=FinancialReportExtraction,
-            temperature=0.0
-        ),
-    )
-
-    parsed_data = response.parsed
-    return {
-        "extracted_data": parsed_data.model_dump(),
-        "extracted_name": parsed_data.company_name
-    }
-
-
-# 3. Node: Draft English Announcement
-def drafting_node(state: BriefcastState):
-    """Generates the initial 30-second English broadcast script."""
-    if TEST_MODE:
-        return run_dummy_drafting()
-
-    data_context = state["extracted_data"]
-    maximum_words = int(
-        state.get("pipeline_config", {}).get("summary_max_words", SUMMARY_MAX_WORDS)
-    )
-    prompt = f"""
-    You are a financial news broadcaster. Using the following JSON data, write a 
-    single-paragraph financial broadcast announcement with a strict maximum of {maximum_words} words.
-    Use active voice and spell out all abbreviations phonetically.
-
-    Data: {data_context}
-    """
-
-    response = get_gemini_client().models.generate_content(
-        model=model_from_state(state, "summary_model", SUMMARY_MODEL),
-        contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.2)
-    )
-
-    return {"english_script": limit_words(response.text, maximum_words)}
-
-
-# 4. Node: Find & Replace Callname
-def name_replacement_node(state: BriefcastState):
-    """Intercepts the English script and swaps the formal name for the callname."""
-    original_name = state.get("extracted_name", "")
-    current_script = state.get("english_script", "")
-
-    if original_name:
-        # Get the callname from your working pickle loader
-        callname = get_callname(original_name)
-
-        # Apply the regex substitution from the text_formatters utility
-        updated_script = inject_callname(current_script, original_name, callname)
-
-
-# 4. Node: Find & Replace Callname
-def name_replacement_node(state: BriefcastState):
-    """Intercepts the English script and swaps the formal name for the callname."""
-    original_name = state.get("extracted_name", "")
-    current_script = state.get("english_script", "")
-
-    if original_name:
-        # Get the callname from your working pickle loader
-        callname = get_callname(original_name)
-
-        # Apply the regex substitution from the text_formatters utility
-        updated_script = inject_callname(current_script, original_name, callname)
-
-        return {"english_script": updated_script}
-
-    return {"english_script": current_script}
-
-
-# 5. Node: Translate to Urdu
-def translation_node(state: BriefcastState):
-    """Translates the perfectly formatted English script into Urdu."""
-    if TEST_MODE:
-        return run_dummy_translation()
-
-    prompt = f"""
-    Translate the following financial broadcast script into formal, natural-sounding Urdu.
-    Maintain the precise numerical values and the exact company name.
-
-    Script to translate:
-    {state['english_script']}
-    """
-
-    response = get_gemini_client().models.generate_content(
-        model=model_from_state(state, "translation_model", TRANSLATION_MODEL),
-        contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.1)
-    )
-
-    return {"urdu_script": response.text}
-
-
-# 6. Build and Compile the LangGraph
-workflow = StateGraph(BriefcastState)
-
-# Add nodes
-workflow.add_node("extract", extraction_node)
-workflow.add_node("draft_english", drafting_node)
-workflow.add_node("replace_callname", name_replacement_node)
-workflow.add_node("translate_urdu", translation_node)
-
-# Define edges (The Execution Flow)
-workflow.add_edge(START, "extract")
-workflow.add_edge("extract", "draft_english")
-workflow.add_edge("draft_english", "replace_callname")
-workflow.add_edge("replace_callname", "translate_urdu")
-workflow.add_edge("translate_urdu", END)
-
-# Compile graph
-briefcast_agent = workflow.compile()
-
-
-# Compatibility layer for the existing FastAPI/frontend three-step contract.
 class DocumentState(TypedDict, total=False):
     raw_text: str
     filename: str
@@ -207,71 +31,120 @@ class DocumentState(TypedDict, total=False):
     english_summary: str
     urdu_summary: str
     audio_path: str
-    pipeline_config: dict
-    summary_metrics: Dict[str, Any]
-    translation_metrics: Dict[str, Any]
-    audio_metrics: Dict[str, Any]
+    pipeline_config: dict[str, Any]
+    summary_metrics: dict[str, Any]
+    translation_metrics: dict[str, Any]
+    audio_metrics: dict[str, Any]
 
 
-async def summarize_node(state: DocumentState) -> dict:
-    """Extract financial data and draft the English broadcast announcement."""
+@lru_cache(maxsize=1)
+def get_gemini_client() -> genai.Client:
+    """Reuse one Gemini client across scanner iterations."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    return genai.Client(api_key=api_key)
+
+
+def limit_words(text: str, maximum: int = SUMMARY_MAX_WORDS) -> str:
+    return " ".join(text.strip().split()[:maximum])
+
+
+def extract_financial_data(text: str, model: str) -> dict[str, Any]:
+    response = get_gemini_client().models.generate_content(
+        model=model,
+        contents=[
+            text,
+            "Extract the company name, stock symbol when present, financial results, and corporate actions from this document.",
+        ],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=FinancialReportExtraction,
+            temperature=0.0,
+        ),
+    )
+    if response.parsed is None:
+        raise ValueError("Gemini returned no structured financial data")
+    if hasattr(response.parsed, "model_dump"):
+        return response.parsed.model_dump()
+    return dict(response.parsed)
+
+
+def draft_summary(data: dict[str, Any], model: str, maximum_words: int) -> str:
+    prompt = (
+        "Write one concise English financial broadcast paragraph from the JSON data below. "
+        f"Use active voice and no more than {maximum_words} words. "
+        "Preserve all important names, figures, dates, and corporate actions.\n\n"
+        f"Data: {json_text(data)}"
+    )
+    response = get_gemini_client().models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(temperature=0.2),
+    )
+    if not response.text:
+        raise ValueError("Gemini returned no English summary")
+    return limit_words(response.text, maximum_words)
+
+
+def translate_summary(summary: str, model: str) -> str:
+    prompt = (
+        "Translate this financial broadcast into formal, natural Pakistani Urdu. "
+        "Preserve all company names, numerical values, dates, and financial meaning. "
+        "Return only the Urdu translation.\n\n"
+        f"{summary}"
+    )
+    response = get_gemini_client().models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(temperature=0.1),
+    )
+    if not response.text:
+        raise ValueError("Gemini returned no Urdu translation")
+    return response.text.strip()
+
+
+def json_text(value: dict[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+async def summarize_node(state: DocumentState) -> dict[str, Any]:
     started = time.time()
-
-    def run_summary() -> dict:
-        graph_state: BriefcastState = {
-            "document_text": state["raw_text"],
-            "extracted_data": {},
-            "extracted_name": "",
-            "english_script": "",
-            "urdu_script": "",
-            "pipeline_config": state.get("pipeline_config", {}),
-        }
-        extracted = extraction_node(graph_state)
-        graph_state.update(extracted)
-        drafted = drafting_node(graph_state)
-        graph_state.update(drafted)
-        graph_state.update(name_replacement_node(graph_state))
-        return graph_state
-
-    result = await asyncio.to_thread(run_summary)
     config = state.get("pipeline_config", {})
+    model = config.get("summary_model", SUMMARY_MODEL)
+    maximum_words = int(config.get("summary_max_words", SUMMARY_MAX_WORDS))
+
+    extracted_data = await asyncio.to_thread(
+        extract_financial_data, state["raw_text"], model
+    )
+    summary = await asyncio.to_thread(
+        draft_summary, extracted_data, model, maximum_words
+    )
     return {
-        "english_summary": result["english_script"],
+        "english_summary": summary,
         "summary_metrics": {
             "duration_seconds": round(time.time() - started, 2),
-            "provider": "dummy" if TEST_MODE else "cloud",
-            "model": "dummy-summary" if TEST_MODE else config.get("summary_model", SUMMARY_MODEL),
-            "usage": {},
-            "extracted_data": result["extracted_data"],
-            "extracted_name": result["extracted_name"],
+            "provider": "cloud",
+            "model": model,
+            "extracted_data": extracted_data,
+            "extracted_name": extracted_data.get("company_name"),
         },
     }
 
 
-async def translate_node(state: DocumentState) -> dict:
-    """Translate an English financial announcement into Urdu."""
+async def translate_node(state: DocumentState) -> dict[str, Any]:
     started = time.time()
-
-    def run_translation() -> str:
-        graph_state: BriefcastState = {
-            "document_text": state.get("raw_text", ""),
-            "extracted_data": {},
-            "extracted_name": "",
-            "english_script": state["english_summary"],
-            "urdu_script": "",
-            "pipeline_config": state.get("pipeline_config", {}),
-        }
-        return translation_node(graph_state)["urdu_script"]
-
-    urdu_script = await asyncio.to_thread(run_translation)
     config = state.get("pipeline_config", {})
+    model = config.get("translation_model", TRANSLATION_MODEL)
+    translation = await asyncio.to_thread(
+        translate_summary, state["english_summary"], model
+    )
     return {
-        "urdu_summary": urdu_script,
+        "urdu_summary": translation,
         "translation_metrics": {
             "duration_seconds": round(time.time() - started, 2),
-            "provider": "dummy" if TEST_MODE else "cloud",
-            "model": "dummy-translation" if TEST_MODE else config.get("translation_model", TRANSLATION_MODEL),
-            "usage": {},
+            "provider": "cloud",
+            "model": model,
         },
     }
 
@@ -287,26 +160,25 @@ def write_mp3(pcm_bytes: bytes, output_file: Path, sample_rate: int) -> None:
     output_file.write_bytes(encoder.encode(pcm_bytes) + encoder.flush())
 
 
-async def generate_audio_node(state: DocumentState) -> dict:
-    """Generate the final MP3 using the configured online Gemini TTS model."""
+async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
     output_file = Path(state["output_dir"]) / state["audio_path"]
-    if TEST_MODE:
-        return run_dummy_audio(output_file, state["audio_path"])
-
     config = state.get("pipeline_config", {})
     provider = config.get("audio_provider", AUDIO_PROVIDER)
-    audio_model = config.get("audio_model", AUDIO_MODEL)
+    model = config.get("audio_model", AUDIO_MODEL)
     urdu_text = state["urdu_summary"]
-    started = time.time()
-
     gender = config.get("gender", DEFAULT_VOICE_GENDER)
     tone = config.get("tone", DEFAULT_SPEECH_TONE)
     voice = GEMINI_VOICE_BY_GENDER.get(
         gender, GEMINI_VOICE_BY_GENDER[DEFAULT_VOICE_GENDER]
     )
+    started = time.time()
+
     response = await get_gemini_client().aio.models.generate_content(
-        model=audio_model,
-        contents=f"Read this Urdu text in a clear Pakistani broadcast accent with a {tone.lower()} tone:\n\n{urdu_text}",
+        model=model,
+        contents=(
+            "Read this Urdu text in a clear Pakistani broadcast accent with a "
+            f"{tone.lower()} tone:\n\n{urdu_text}"
+        ),
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -318,33 +190,31 @@ async def generate_audio_node(state: DocumentState) -> dict:
     )
     if not response.candidates or not response.candidates[0].content.parts:
         raise ValueError("Gemini returned no audio data")
-    audio_bytes = response.candidates[0].content.parts[0].inline_data.data
+    inline_data = response.candidates[0].content.parts[0].inline_data
+    if inline_data is None or not inline_data.data:
+        raise ValueError("Gemini returned an empty audio response")
 
     await asyncio.to_thread(
-        write_mp3, audio_bytes, output_file, AUDIO_SAMPLE_RATE_HZ
+        write_mp3, inline_data.data, output_file, AUDIO_SAMPLE_RATE_HZ
     )
-
     return {
         "audio_path": state["audio_path"],
         "audio_metrics": {
             "characters": len(urdu_text),
             "duration_seconds": round(time.time() - started, 2),
             "provider": provider,
-            "model": audio_model,
+            "model": model,
         },
     }
 
 
-def create_document_pipeline_graph():
-    builder = StateGraph(DocumentState)
-    builder.add_node("summarize", summarize_node)
-    builder.add_node("translate", translate_node)
-    builder.add_node("generate_audio", generate_audio_node)
-    builder.add_edge(START, "summarize")
-    builder.add_edge("summarize", "translate")
-    builder.add_edge("translate", "generate_audio")
-    builder.add_edge("generate_audio", END)
-    return builder.compile()
+class DocumentPipeline:
+    async def ainvoke(self, initial_state: DocumentState) -> DocumentState:
+        state = dict(initial_state)
+        state.update(await summarize_node(state))
+        state.update(await translate_node(state))
+        state.update(await generate_audio_node(state))
+        return state
 
 
-document_graph = create_document_pipeline_graph()
+document_graph = DocumentPipeline()

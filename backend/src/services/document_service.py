@@ -1,10 +1,10 @@
 # src/services/document_service.py
 
 from pathlib import Path
-from typing import Dict
 
 import docx
 import pypdf
+
 from src.core.config import (
     DOCX_DOCUMENT_EXTENSION,
     PDF_DOCUMENT_EXTENSION,
@@ -32,32 +32,3 @@ class DocumentService:
         raise ValueError(
             f"Unsupported document type '{ext or 'unknown'}'. Use TXT, PDF, or DOCX."
         )
-
-    @staticmethod
-    def read_folder(folder_path: str) -> Dict[str, str]:
-        """
-        Scans a directory and extracts text from PDF, DOCX, and TXT files.
-        Returns a dictionary mapping filename to extracted text.
-        """
-        results = {}
-        path = Path(folder_path)
-
-        if not path.exists() or not path.is_dir():
-            raise ValueError(f"Directory not found: {folder_path}")
-
-        for file_path in path.glob("*"):
-            if not file_path.is_file():
-                continue
-
-            filename = file_path.name
-
-            try:
-                results[filename] = DocumentService.read_file(file_path)
-
-            except ValueError:
-                continue
-            except Exception as e:
-                # Matches the error handling expected by announcement.py
-                results[filename] = f"Error extracting {filename}: {str(e)}"
-
-        return results

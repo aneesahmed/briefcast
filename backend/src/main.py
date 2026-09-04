@@ -1,32 +1,27 @@
 # src/main.py
 
-from contextlib import asynccontextmanager
 import logging
-from fastapi import FastAPI
-from fastapi.openapi.utils import get_openapi
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-import uvicorn
-from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
-# Updated: Use 'src.api.routes' (or relative '.api.routes')
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
+
 from src.api.routes import (
     router as api_router,
+)
+from src.api.routes import (
     scanner_runtime_enabled,
     shutdown_folder_scanner,
     start_folder_scanner,
 )
 from src.core.config import (
-    APP_MODE,
-    FRONTEND_DIST_DIR,
+    LOG_FILE_PATH,
     SERVER_HOST,
     SERVER_PORT,
     SERVER_RELOAD,
-    LOG_FILE_PATH,
 )
-
-load_dotenv()
 
 # Configure logging to write to both console and file
 file_handler = logging.FileHandler(LOG_FILE_PATH, encoding="utf-8")
@@ -34,14 +29,6 @@ file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(mes
 
 logger = logging.getLogger("uvicorn.error")
 logger.addHandler(file_handler)
-
-if APP_MODE == "live":
-    print("WARNING: Starting in LIVE mode. Real API calls will be made, incurring costs.")
-    try:
-        input("Press Enter to continue or Ctrl+C to cancel...")
-    except KeyboardInterrupt:
-        print("\nStartup cancelled.")
-        exit(1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,7 +44,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Briefcast API",
     version="1.0.0",
-    description="Processes documents and raw text, executes async LangGraph workflows, and generates Urdu TTS audio broadcasts.",
+    description="Scans source documents and publishes dated Urdu audio broadcasts.",
     lifespan=lifespan,
 )
 
@@ -96,20 +83,6 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
-
-
-if FRONTEND_DIST_DIR.exists():
-    # Register after all API/docs routes so the SPA only handles frontend paths.
-    app.mount("/", StaticFiles(directory=FRONTEND_DIST_DIR, html=True), name="frontend")
-else:
-    @app.get("/", include_in_schema=False)
-    async def frontend_not_built():
-        return JSONResponse(
-            status_code=503,
-            content={
-                "detail": "Frontend build not found. Run `npm run build` in the frontend directory."
-            },
-        )
 
 def run() -> None:
     """Start Briefcast using the committed defaults from core/config.py."""
