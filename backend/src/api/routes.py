@@ -76,7 +76,33 @@ async def upload_documents(files: Annotated[list[UploadFile], File()]):
     }
 
 
-@router.get("/api/scanner/status", tags=["Scanner"])
+@router.get(
+    "/api/scanner/status", 
+    tags=["Scanner"],
+    summary="Get Scanner Status",
+    description="Returns the real-time status of the automatic background folder scanner, including whether it is currently running, configuration status, active files, and directory paths.",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "running": True,
+                        "enabled": True,
+                        "interval_seconds": 10,
+                        "active_files": ["Q2_Earnings_Apple.pdf"],
+                        "processing_count": 1,
+                        "configuration_ready": True,
+                        "configuration_error": None,
+                        "source_directory": "C:\\catalyst\\briefing_source",
+                        "processed_directory": "C:\\catalyst\\briefing_processed",
+                        "failed_directory": "C:\\catalyst\\briefing_failed"
+                    }
+                }
+            }
+        }
+    }
+)
 async def get_scanner_status():
     return scanner_status()
 
@@ -305,7 +331,8 @@ async def run_pipeline_core(
         metrics = final_state.get("summary_metrics", {})
         extracted_data = metrics.get("extracted_data", {}) or {}
         company_name = metrics.get("extracted_name") or extracted_data.get("company_name")
-        title = company_name or title_from_filename(filename)
+        extracted_title = metrics.get("extracted_title") or extracted_data.get("title")
+        title = extracted_title or company_name or title_from_filename(filename)
 
         write_text_atomic(PROCESSED_DOCS_DIR / summary_file, summary)
         write_text_atomic(PROCESSED_DOCS_DIR / translation_file, translation)

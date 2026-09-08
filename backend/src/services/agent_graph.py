@@ -29,6 +29,7 @@ class DocumentState(TypedDict, total=False):
     filename: str
     output_dir: Path
     english_summary: str
+    callname: str
     urdu_summary: str
     audio_path: str
     pipeline_config: dict[str, Any]
@@ -55,7 +56,7 @@ def extract_financial_data(text: str, model: str) -> dict[str, Any]:
         model=model,
         contents=[
             text,
-            "Extract the company name, stock symbol when present, financial results, and corporate actions from this document.",
+            "Extract the title (from the subject line if given, otherwise extract a suitable title from the document), formal company name, stock symbol when present, and a conversational broadcast_callname (e.g. strip away 'Limited', 'Inc', brackets, and make it sound natural on air). Also extract financial results and corporate actions.",
         ],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -70,11 +71,13 @@ def extract_financial_data(text: str, model: str) -> dict[str, Any]:
     return dict(response.parsed)
 
 
-def draft_summary(data: dict[str, Any], model: str, maximum_words: int) -> str:
+def draft_summary(data: dict[str, Any], model: str, maximum_words: int, callname: str) -> str:
     prompt = (
         "Write one concise English financial broadcast paragraph from the JSON data below. "
         f"Use active voice and no more than {maximum_words} words. "
-        "Preserve all important names, figures, dates, and corporate actions.\n\n"
+        f"Refer to the company exclusively as '{callname}' and use this name exactly once in the summary. "
+        "Do not use the formal company name or stock symbol. "
+        "Preserve all important figures, dates, and corporate actions.\n\n"
         f"Data: {json_text(data)}"
     )
     response = get_gemini_client().models.generate_content(
@@ -117,17 +120,49 @@ async def summarize_node(state: DocumentState) -> dict[str, Any]:
     extracted_data = await asyncio.to_thread(
         extract_financial_data, state["raw_text"], model
     )
+    
+    company_name = extracted_data.get("company_name", "")
+    symbol = extracted_data.get("symbol", "")
+    
+    from scripts.name_calling import StockRegistry
+    registry = StockRegistry()
+    callname = ""
+    
+    # 1. Try registry match by symbol
+    if symbol:
+        match = registry.get(symbol)
+        if match:
+            callname = match.callname
+            
+    # 2. Try registry match by company name
+    if not callname and company_name:
+        normalized = company_name.casefold()
+        for record in registry.records.values():
+            if record.company.casefold() == normalized:
+                callname = record.callname
+                break
+                
+    # 3. Fallback to LLM-generated broadcast_callname
+    if not callname:
+        callname = extracted_data.get("broadcast_callname") or ""
+            
+    # 4. Ultimate fallback
+    if not callname:
+        callname = company_name or symbol or ""
+        
     summary = await asyncio.to_thread(
-        draft_summary, extracted_data, model, maximum_words
+        draft_summary, extracted_data, model, maximum_words, callname
     )
     return {
         "english_summary": summary,
+        "callname": callname,
         "summary_metrics": {
             "duration_seconds": round(time.time() - started, 2),
             "provider": "cloud",
             "model": model,
             "extracted_data": extracted_data,
-            "extracted_name": extracted_data.get("company_name"),
+            "extracted_name": company_name,
+            "extracted_title": extracted_data.get("title"),
         },
     }
 
@@ -211,8 +246,11 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
 class DocumentPipeline:
     async def ainvoke(self, initial_state: DocumentState) -> DocumentState:
         state = dict(initial_state)
+        # 1. Fact extraction & English draft (now uses computed callname internally)
         state.update(await summarize_node(state))
+        # 2. Translate the polished English script to Urdu
         state.update(await translate_node(state))
+        # 3. Generate speech audio from Urdu text
         state.update(await generate_audio_node(state))
         return state
 

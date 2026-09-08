@@ -39,10 +39,10 @@ SCANNER_INTERVAL_SECONDS = 5.0
 
 # Gemini text pipeline
 SUMMARY_PROVIDER = "cloud"
-SUMMARY_MODEL = "gemini-2.5-flash"
+SUMMARY_MODEL = "gemini-3.5-flash-lite"
 SUMMARY_MAX_WORDS = 120
 TRANSLATION_PROVIDER = "cloud"
-TRANSLATION_MODEL = "gemini-2.5-flash"
+TRANSLATION_MODEL = "gemini-3.5-flash-lite"
 
 # Audio pipeline
 AUDIO_PROVIDER = "cloud"

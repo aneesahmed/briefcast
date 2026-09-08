@@ -2,6 +2,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, field_validator
+from dataclasses import dataclass
 
 from src.core.config import (
     AUDIO_MODEL,
@@ -70,9 +71,18 @@ class CorporateAction(BaseModel):
 
 class FinancialReportExtraction(BaseModel):
     document_classification: str
+    title: str | None = None
     company_name: str
     symbol: str | None = None
+    broadcast_callname: str | None = None
     reporting_period: str
     currency_scale: str
     key_metrics: list[FinancialMetric]
     corporate_actions: CorporateAction | None = None
+
+
+@dataclass
+class StockRecord:
+    symbol: str
+    company: str
+    callname: str
