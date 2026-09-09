@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import uuid
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -268,12 +269,17 @@ def scanner_configuration_error() -> str | None:
 
 async def scan_input_folder(stop_when_paused: bool = False) -> None:
     supported = set(SUPPORTED_DOCUMENT_EXTENSIONS)
-    source_files = sorted(INPUT_DOCS_DIR.iterdir(), key=lambda path: path.name.casefold())
-    for source_file in source_files:
+    source_dir = Path(INPUT_DOCS_DIR)
+    source_files = sorted(source_dir.iterdir(), key=lambda path: path.name.casefold())
+    
+    valid_files = [f for f in source_files if f.is_file() and f.suffix.lower() in supported]
+    if not valid_files:
+        logger.info("Scanner checked folder: No files to process.")
+        return
+
+    for source_file in valid_files:
         if stop_when_paused and not scanner_runtime_enabled:
             break
-        if not source_file.is_file() or source_file.suffix.lower() not in supported:
-            continue
 
         if processed_artifacts_exist(source_file):
             source_file = rename_colliding_source(source_file)
@@ -285,7 +291,13 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
             "status": "processing",
             "received_at": datetime.now(local_timezone).isoformat(),
         }
+        
+        start_time = time.time()
         await process_scanner_file(source_file, transaction_id)
+        elapsed = time.time() - start_time
+        
+        timestamp = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(f"Processed file: {source_file.name} at {timestamp} - Time taken: {elapsed:.2f} seconds")
 
 
 async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
@@ -342,9 +354,10 @@ async def run_pipeline_core(
         title = extracted_title or company_name or title_from_filename(filename)
         callname = final_state.get("callname", "")
 
-        write_text_atomic(PROCESSED_DOCS_DIR / summary_file, summary)
-        write_text_atomic(PROCESSED_DOCS_DIR / translation_file, translation)
-        (PROCESSED_DOCS_DIR / audio_temporary).replace(PROCESSED_DOCS_DIR / audio_file)
+        processed_dir = Path(PROCESSED_DOCS_DIR)
+        write_text_atomic(processed_dir / summary_file, summary)
+        write_text_atomic(processed_dir / translation_file, translation)
+        (processed_dir / audio_temporary).replace(processed_dir / audio_file)
 
         record = {
             "job_id": transaction_id,

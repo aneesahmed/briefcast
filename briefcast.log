@@ -18,3 +18,11 @@
 2026-09-09 11:11:40,751 - INFO - Waiting for application shutdown.
 2026-09-09 11:11:40,753 - INFO - Application shutdown complete.
 2026-09-09 11:11:40,753 - INFO - Finished server process [14276]
+2026-09-09 11:11:43,245 - INFO - Started server process [13156]
+2026-09-09 11:11:43,245 - INFO - Waiting for application startup.
+2026-09-09 11:11:43,245 - INFO - Application startup complete.
+2026-09-09 11:11:43,245 - INFO - Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-09-09 11:36:46,322 - INFO - Shutting down
+2026-09-09 11:36:46,435 - INFO - Waiting for application shutdown.
+2026-09-09 11:36:46,435 - INFO - Application shutdown complete.
+2026-09-09 11:36:46,437 - INFO - Finished server process [13156]

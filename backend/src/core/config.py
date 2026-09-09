@@ -4,6 +4,7 @@ Secrets such as GEMINI_API_KEY belong in ``backend/.env``. Operational
 defaults and model names live here so deployments use one source of truth.
 """
 
+
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -12,9 +13,9 @@ from dotenv import load_dotenv
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
 load_dotenv(BACKEND_DIR / ".env")
-BRIEFING_SOURCE_DIR = PROJECT_DIR / "briefing_source"
-PROCESSED_FILES_DIR = PROJECT_DIR / "processed_files"
-FAILED_FILES_DIR = PROJECT_DIR / "failed_files"
+BRIEFING_SOURCE_DIR = Path(r"C:\working\AI26\briefcast\briefing_source")
+PROCESSED_FILES_DIR = Path(r"C:\working\AI26\briefcast\processed_files")
+FAILED_FILES_DIR = Path(r"C:\working\AI26\briefcast\failed_files")
 INPUT_DOCS_DIR = BRIEFING_SOURCE_DIR
 PROCESSED_DOCS_DIR = PROCESSED_FILES_DIR
 LOG_FILE_PATH = PROJECT_DIR / "briefcast.log"
