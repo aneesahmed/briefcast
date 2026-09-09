@@ -136,14 +136,17 @@ async def scan_now():
 async def get_audio_by_date(
     request: Request,
     target_date: Annotated[
-        str, Query(alias="date", description="Completion date in YYYY-MM-DD format")
+        str, Query(alias="date", description="Completion date in YYYY-MM-DD format or 'today'")
     ],
 ):
     """Return titles and downloadable audio URLs completed on the requested date."""
-    try:
-        requested_date = date.fromisoformat(target_date)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="date must use YYYY-MM-DD format") from exc
+    if target_date.strip().lower() == "today":
+        requested_date = datetime.now(local_timezone).date()
+    else:
+        try:
+            requested_date = date.fromisoformat(target_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="date must use YYYY-MM-DD format or 'today'") from exc
 
     items = []
     for manifest in await load_completed_manifests():
@@ -166,6 +169,10 @@ async def get_audio_by_date(
                 "title": manifest.get("title") or title_from_filename(
                     manifest.get("original_filename", audio_file)
                 ),
+                "file_name": manifest.get("original_filename"),
+                "symbol": manifest.get("symbol"),
+                "company_name": manifest.get("company_name"),
+                "calling_name": manifest.get("calling_name"),
                 "audio_url": str(request.url_for("download_audio", filename=audio_file)),
             }
         )
@@ -333,6 +340,7 @@ async def run_pipeline_core(
         company_name = metrics.get("extracted_name") or extracted_data.get("company_name")
         extracted_title = metrics.get("extracted_title") or extracted_data.get("title")
         title = extracted_title or company_name or title_from_filename(filename)
+        callname = final_state.get("callname", "")
 
         write_text_atomic(PROCESSED_DOCS_DIR / summary_file, summary)
         write_text_atomic(PROCESSED_DOCS_DIR / translation_file, translation)
@@ -346,6 +354,7 @@ async def run_pipeline_core(
             "completed_at": datetime.now(local_timezone).isoformat(),
             "company_name": company_name,
             "symbol": extracted_data.get("symbol"),
+            "calling_name": callname,
             "summary_file": summary_file,
             "translation_file": translation_file,
             "audio_file": audio_file,
