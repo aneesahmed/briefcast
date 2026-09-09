@@ -51,12 +51,46 @@ def limit_words(text: str, maximum: int = SUMMARY_MAX_WORDS) -> str:
     return " ".join(text.strip().split()[:maximum])
 
 
+_cached_registry_csv = ""
+_last_pkl_mtime = 0.0
+
+def get_registry_csv() -> str:
+    global _cached_registry_csv, _last_pkl_mtime
+    from scripts.name_calling import StockRegistry, DEFAULT_DB_PATH
+    import os
+    
+    try:
+        current_mtime = os.path.getmtime(DEFAULT_DB_PATH)
+    except OSError:
+        current_mtime = 0.0
+        
+    if current_mtime != _last_pkl_mtime or not _cached_registry_csv:
+        registry = StockRegistry()
+        registry_lines = [f"{r.symbol} | {r.company} | {r.callname}" for r in registry.records.values()]
+        _cached_registry_csv = "\n".join(registry_lines)
+        _last_pkl_mtime = current_mtime
+        
+    return _cached_registry_csv
+
 def extract_financial_data(text: str, model: str) -> dict[str, Any]:
+    registry_csv = get_registry_csv()
+
+    prompt = (
+        "Extract the title (from the subject line if given, otherwise extract a suitable title from the document). "
+        "Extract the formal company name, official stock symbol, and conversational broadcast_callname. "
+        "Also extract financial results and corporate actions.\n\n"
+        "IMPORTANT: Here is the official PSX registry (Symbol | Company | Callname). "
+        "You MUST use your semantic understanding to perfectly match the company from the document to this list. "
+        "If the company exists in this list, you MUST strictly use its official symbol and official callname from this list instead of inventing one. "
+        "If it does not exist in the list, infer the symbol and generate a natural sounding callname (e.g. strip away 'Limited', 'Inc', brackets).\n\n"
+        f"PSX REGISTRY:\n{registry_csv}"
+    )
+
     response = get_gemini_client().models.generate_content(
         model=model,
         contents=[
             text,
-            "Extract the title (from the subject line if given, otherwise extract a suitable title from the document), formal company name, stock symbol when present, and a conversational broadcast_callname (e.g. strip away 'Limited', 'Inc', brackets, and make it sound natural on air). Also extract financial results and corporate actions.",
+            prompt,
         ],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -124,29 +158,11 @@ async def summarize_node(state: DocumentState) -> dict[str, Any]:
     company_name = extracted_data.get("company_name", "")
     symbol = extracted_data.get("symbol", "")
     
-    from scripts.name_calling import StockRegistry
-    registry = StockRegistry()
-    callname = ""
-    
-    # 1. Try registry match by symbol
-    if symbol:
-        match = registry.get(symbol)
-        if match:
-            callname = match.callname
+    # We now perfectly rely on the LLM's semantic matching against the registry 
+    # injected during extract_financial_data
+    callname = extracted_data.get("broadcast_callname") or ""
             
-    # 2. Try registry match by company name
-    if not callname and company_name:
-        normalized = company_name.casefold()
-        for record in registry.records.values():
-            if record.company.casefold() == normalized:
-                callname = record.callname
-                break
-                
-    # 3. Fallback to LLM-generated broadcast_callname
-    if not callname:
-        callname = extracted_data.get("broadcast_callname") or ""
-            
-    # 4. Ultimate fallback
+    # Ultimate fallback
     if not callname:
         callname = company_name or symbol or ""
         
@@ -223,9 +239,15 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
             ),
         ),
     )
-    if not response.candidates or not response.candidates[0].content.parts:
-        raise ValueError("Gemini returned no audio data")
-    inline_data = response.candidates[0].content.parts[0].inline_data
+    if not response.candidates:
+        raise ValueError("Gemini returned no candidates.")
+        
+    candidate = response.candidates[0]
+    if not candidate.content or not candidate.content.parts:
+        reason = getattr(candidate, "finish_reason", "unknown")
+        raise ValueError(f"Gemini returned no audio data (finish reason: {reason}). Text might have triggered a safety filter.")
+        
+    inline_data = candidate.content.parts[0].inline_data
     if inline_data is None or not inline_data.data:
         raise ValueError("Gemini returned an empty audio response")
 

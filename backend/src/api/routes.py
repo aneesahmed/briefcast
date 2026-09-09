@@ -359,11 +359,18 @@ async def run_pipeline_core(
         write_text_atomic(processed_dir / translation_file, translation)
         (processed_dir / audio_temporary).replace(processed_dir / audio_file)
 
+        source_file_path = Path(INPUT_DOCS_DIR) / filename
+        if source_file_path.exists():
+            source_date = datetime.fromtimestamp(source_file_path.stat().st_mtime, local_timezone).strftime("%Y-%m-%d")
+        else:
+            source_date = datetime.now(local_timezone).strftime("%Y-%m-%d")
+
         record = {
             "job_id": transaction_id,
             "original_filename": filename,
             "title": title,
             "status": "completed",
+            "source_file_date": source_date,
             "completed_at": datetime.now(local_timezone).isoformat(),
             "company_name": company_name,
             "symbol": extracted_data.get("symbol"),
@@ -440,7 +447,8 @@ def fail_source_file(filename: str, transaction_id: str, error: str) -> None:
 
 
 def parse_record_datetime(record: dict[str, Any]) -> datetime | None:
-    value = record.get("completed_at")
+    # Prefer source_file_date over completed_at if available
+    value = record.get("source_file_date") or record.get("completed_at")
     if not isinstance(value, str):
         return None
     try:

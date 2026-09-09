@@ -172,6 +172,10 @@ def test_audio_feed_filters_by_date(tmp_path, monkeypatch):
         "items": [
             {
                 "title": "Example Limited",
+                "file_name": "example.pdf",
+                "symbol": None,
+                "company_name": None,
+                "calling_name": None,
                 "audio_url": "http://testserver/api/audio/example_audio.mp3",
             }
         ],
