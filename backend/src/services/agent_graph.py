@@ -10,7 +10,6 @@ from google import genai
 from google.genai import types
 
 from src.core.config import (
-    AUDIO_MODEL,
     AUDIO_PROVIDER,
     AUDIO_SAMPLE_RATE_HZ,
     DEFAULT_SPEECH_TONE,
@@ -18,6 +17,9 @@ from src.core.config import (
     GEMINI_VOICE_BY_GENDER,
     MP3_BIT_RATE_KBPS,
     SUMMARY_MAX_WORDS,
+)
+from src.settings import (
+    AUDIO_MODEL,
     SUMMARY_MODEL,
     TRANSLATION_MODEL,
 )

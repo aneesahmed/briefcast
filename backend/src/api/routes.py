@@ -12,18 +12,25 @@ from typing import Annotated, Any
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from src.core.config import (
+from src.api.routes import (
+    scanner_runtime_enabled,
+    shutdown_folder_scanner,
+    start_folder_scanner,
+)
+from src.settings import (
     AUDIO_FILE_SUFFIX,
-    ERROR_FILE_SUFFIX,
     FAILED_FILES_DIR,
     INPUT_DOCS_DIR,
     MANIFEST_FILE_SUFFIX,
     PROCESSED_DOCS_DIR,
+    SUMMARY_FILE_SUFFIX,
+    TRANSLATION_FILE_SUFFIX,
+    ERROR_FILE_SUFFIX,
+)
+from src.core.config import (
     SCANNER_ENABLED,
     SCANNER_INTERVAL_SECONDS,
-    SUMMARY_FILE_SUFFIX,
     SUPPORTED_DOCUMENT_EXTENSIONS,
-    TRANSLATION_FILE_SUFFIX,
 )
 from src.models import PipelineConfig
 from src.services.agent_graph import document_graph

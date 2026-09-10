@@ -4,7 +4,8 @@ import re
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from google import genai
-from src.core.config import MODEL_PRICING, SUMMARY_MODEL, USD_TO_PKR_FALLBACK
+from src.core.config import MODEL_PRICING, USD_TO_PKR_FALLBACK
+from src.settings import SUMMARY_MODEL
 
 load_dotenv()
 

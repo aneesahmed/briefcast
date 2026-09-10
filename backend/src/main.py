@@ -1,5 +1,6 @@
 # src/main.py
 
+import argparse
 import logging
 from contextlib import asynccontextmanager
 
@@ -16,12 +17,7 @@ from src.api.routes import (
     shutdown_folder_scanner,
     start_folder_scanner,
 )
-from src.core.config import (
-    LOG_FILE_PATH,
-    SERVER_HOST,
-    SERVER_PORT,
-    SERVER_RELOAD,
-)
+from src.settings import LOG_FILE_PATH
 
 # Configure logging to write to both console and file
 file_handler = logging.FileHandler(LOG_FILE_PATH, encoding="utf-8")
@@ -85,12 +81,19 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 def run() -> None:
-    """Start Briefcast using the committed defaults from core/config.py."""
+    """Start Briefcast with command-line arguments."""
+    parser = argparse.ArgumentParser(description="Run Briefcast API server")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Bind socket to this host.")
+    parser.add_argument("--port", type=int, default=8000, help="Bind socket to this port.")
+    parser.add_argument("--reload", action="store_true", help="Enable auto-reload.")
+    
+    args = parser.parse_args()
+    
     uvicorn.run(
         "src.main:app",
-        host=SERVER_HOST,
-        port=SERVER_PORT,
-        reload=SERVER_RELOAD,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
     )
 
 

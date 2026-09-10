@@ -13,20 +13,22 @@ from dotenv import load_dotenv
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
 load_dotenv(BACKEND_DIR / ".env")
-BRIEFING_SOURCE_DIR = Path(r"C:\working\AI26\briefcast\briefing_source")
-PROCESSING_FILES_DIR = Path(r"C:\working\AI26\briefcast\processing_files")
-PROCESSED_FILES_DIR = Path(r"C:\working\AI26\briefcast\processed_files")
-FAILED_FILES_DIR = Path(r"C:\working\AI26\briefcast\failed_files")
+
+from src.settings import (
+    BRIEFING_SOURCE_DIR,
+    PROCESSING_FILES_DIR,
+    PROCESSED_FILES_DIR,
+    FAILED_FILES_DIR,
+    LOG_FILE_PATH,
+    SUMMARY_MODEL,
+    TRANSLATION_MODEL,
+    OCR_MODEL,
+    AUDIO_MODEL,
+)
+
 INPUT_DOCS_DIR = BRIEFING_SOURCE_DIR
 PROCESSING_DOCS_DIR = PROCESSING_FILES_DIR
 PROCESSED_DOCS_DIR = PROCESSED_FILES_DIR
-LOG_FILE_PATH = PROJECT_DIR / "briefcast.log"
-
-# Web server defaults. Command-line Uvicorn options can still override these
-# for one-off runs or deployment environments.
-SERVER_HOST = "0.0.0.0"
-SERVER_PORT = 8000
-SERVER_RELOAD = False
 
 # Document intake
 TEXT_DOCUMENT_EXTENSION = ".txt"
@@ -42,15 +44,11 @@ SCANNER_INTERVAL_SECONDS = 5.0
 
 # Gemini text pipeline
 SUMMARY_PROVIDER = "cloud"
-SUMMARY_MODEL = "gemini-3.7-flash"
 SUMMARY_MAX_WORDS = 120
 TRANSLATION_PROVIDER = "cloud"
-TRANSLATION_MODEL = "gemini-3.7-flash"
-OCR_MODEL = "gemini-3.7-flash"
 
 # Audio pipeline
 AUDIO_PROVIDER = "cloud"
-AUDIO_MODEL = "gemini-2.5-flash-preview-tts"
 AUDIO_FORMAT = "mp3"
 AUDIO_SAMPLE_RATE_HZ = 24_000
 MP3_BIT_RATE_KBPS = 128
@@ -59,17 +57,7 @@ DEFAULT_SPEECH_TONE = "Announcement"
 GEMINI_VOICE_BY_GENDER = {"Female": "Aoede", "Male": "Puck"}
 
 # Add more online models to a task tuple when a pipeline stage needs alternatives.
-MODEL_OPTIONS = {
-    "summary": (SUMMARY_MODEL,),
-    "translation": (TRANSLATION_MODEL,),
-    "audio": (AUDIO_MODEL,),
-}
-# Flat artifact naming
-SUMMARY_FILE_SUFFIX = "_summary.txt"
-TRANSLATION_FILE_SUFFIX = "_translation.txt"
-AUDIO_FILE_SUFFIX = f"_audio.{AUDIO_FORMAT}"
-MANIFEST_FILE_SUFFIX = "_manifest.json"
-ERROR_FILE_SUFFIX = "_error.json"
+# (Model tuples removed, moved to settings)
 
 
 for directory in (BRIEFING_SOURCE_DIR, PROCESSED_FILES_DIR, FAILED_FILES_DIR):

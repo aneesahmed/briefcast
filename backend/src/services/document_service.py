@@ -36,7 +36,7 @@ class DocumentService:
             # If no text was found (image-only PDF), use Gemini File API to read the scanned document
             import os
             from google import genai
-            from src.core.config import OCR_MODEL
+            from src.settings import OCR_MODEL
             
             client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
             uploaded_file = client.files.upload(file=str(file_path))
