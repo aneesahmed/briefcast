@@ -17,6 +17,8 @@ dependencies = [
     "python-dotenv>=1.0.1,<2.0.0",
     "python-multipart>=0.0.32,<1.0.0",
     "lameenc>=1.8.1,<2.0.0",
+    "psycopg2-binary>=2.9.13",
+    "sqlalchemy>=2.0.52",
 ]
 
 [dependency-groups]

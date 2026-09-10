@@ -16,6 +16,8 @@ from src.api.routes import (
     scanner_runtime_enabled,
     shutdown_folder_scanner,
     start_folder_scanner,
+    start_audit_scanner,
+    stop_audit_scanner,
 )
 from src.settings import LOG_FILE_PATH
 
@@ -33,7 +35,9 @@ async def lifespan(app: FastAPI):
             await start_folder_scanner()
         except RuntimeError as exc:
             logger.warning("Automatic scanner is paused: %s", exc)
+    # await start_audit_scanner() # Disabled DB logic for now
     yield
+    # await stop_audit_scanner() # Disabled DB logic for now
     await shutdown_folder_scanner()
 
 

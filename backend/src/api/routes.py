@@ -5,6 +5,8 @@ import os
 import shutil
 import uuid
 import time
+import psycopg2
+import psycopg2.extras
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -265,19 +267,40 @@ def scanner_configuration_error() -> str | None:
     return None
 
 
+def is_file_locked(filepath: Path) -> bool:
+    """Checks if a file is locked by attempting to open it for appending."""
+    try:
+        with open(filepath, 'a'):
+            pass
+        return False
+    except IOError:
+        return True
+
 async def scan_input_folder(stop_when_paused: bool = False) -> None:
     supported = set(SUPPORTED_DOCUMENT_EXTENSIONS)
     source_dir = Path(INPUT_DOCS_DIR)
     source_files = sorted(source_dir.iterdir(), key=lambda path: path.name.casefold())
     
     valid_files = [f for f in source_files if f.is_file() and f.suffix.lower() in supported]
+    
+    try:
+        from zoneinfo import ZoneInfo
+        local_timezone = ZoneInfo("Asia/Karachi")
+    except ImportError:
+        local_timezone = None
+
     if not valid_files:
-        logger.info("Scanner checked folder: No files to process.")
+        timestamp = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(f"[{timestamp}] Scanner checked folder: No files to process.")
         return
 
     for source_file in valid_files:
         if stop_when_paused and not scanner_runtime_enabled:
             break
+
+        if is_file_locked(source_file):
+            logger.warning(f"File {source_file.name} is currently locked by another process (likely downloading). Leaving for next scan.")
+            continue
 
         # Collision renaming removed as per user request.
         # We will reuse existing artifacts or regenerate missing ones in-place.
@@ -285,8 +308,10 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
         transaction_id = str(uuid.uuid4())
         
         # Move to processing folder for intermediate processing
-        from src.core.config import PROCESSING_DOCS_DIR
+        from src.settings import PROCESSING_DOCS_DIR
         processing_file = Path(PROCESSING_DOCS_DIR) / source_file.name
+        
+        # Now safe to move since we checked for locks
         source_file.replace(processing_file)
         
         active_jobs[transaction_id] = {
@@ -309,10 +334,23 @@ async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
 
     scanner_active_file = source_file.name
     try:
-        content = await asyncio.to_thread(DocumentService.read_file, source_file)
+        content, ocr_usage, document_type = await asyncio.to_thread(DocumentService.read_file, source_file)
         if not content.strip():
             raise ValueError(f"No readable text was found in {source_file.name}.")
-        await run_pipeline_core(transaction_id, source_file.name, content, PipelineConfig())
+            
+        config = PipelineConfig()
+        
+        file_size_bytes = source_file.stat().st_size if source_file.exists() else 0
+        
+        await run_pipeline_core(
+            transaction_id, 
+            source_file.name, 
+            content, 
+            config, 
+            ocr_usage=ocr_usage,
+            document_type=document_type,
+            file_size_bytes=file_size_bytes
+        )
     except Exception as exc:
         logger.exception("Unable to process %s", source_file.name)
         await asyncio.to_thread(fail_source_file, source_file.name, transaction_id, str(exc))
@@ -326,12 +364,18 @@ async def run_pipeline_core(
     filename: str,
     content: str,
     config: PipelineConfig,
+    ocr_usage: dict[str, int] = None,
+    document_type: str = "unknown",
+    file_size_bytes: int = 0,
 ) -> dict[str, Any]:
     base_name = Path(filename).stem
     audio_file = f"{base_name}{AUDIO_FILE_SUFFIX}"
     audio_temporary = f".{base_name}_{transaction_id}.audio.part"
     summary_file = f"{base_name}{SUMMARY_FILE_SUFFIX}"
     translation_file = f"{base_name}{TRANSLATION_FILE_SUFFIX}"
+
+    if ocr_usage is None:
+        ocr_usage = {"input_tokens": 0, "output_tokens": 0}
 
     try:
         final_state = await document_graph.ainvoke(
@@ -343,6 +387,7 @@ async def run_pipeline_core(
                 "urdu_summary": (Path(PROCESSED_DOCS_DIR) / translation_file).read_text(encoding="utf-8") if (Path(PROCESSED_DOCS_DIR) / translation_file).exists() else "",
                 "audio_path": audio_file if (Path(PROCESSED_DOCS_DIR) / audio_file).exists() else audio_temporary,
                 "pipeline_config": config.model_dump(),
+                "ocr_metrics": ocr_usage,
                 "summary_metrics": {},
                 "translation_metrics": {},
                 "audio_metrics": {},
@@ -371,9 +416,50 @@ async def run_pipeline_core(
         else:
             source_date = datetime.now(local_timezone).strftime("%Y-%m-%d")
 
+        def get_artifact_size(f_name: str) -> int:
+            p = processed_dir / f_name
+            return p.stat().st_size if p.exists() else 0
+
+        import json
+        try:
+            with open("model_pricing.json", "r") as f:
+                pricing = json.load(f)
+        except Exception:
+            pricing = {}
+
+        def compute_cost_cents(metrics: dict, default_model: str = "") -> float:
+            if not metrics: return 0.0
+            model = metrics.get("model", default_model)
+            inp = metrics.get("input_tokens", 0)
+            out = metrics.get("output_tokens", 0)
+            price = pricing.get(model)
+            if price:
+                cost_usd = (inp / 1_000_000) * price["input_cost_per_million"] + (out / 1_000_000) * price["output_cost_per_million"]
+                return round(cost_usd * 100, 4)
+            return 0.0
+
+        ocr_m = final_state.get("ocr_metrics", {})
+        ocr_m["cost_cents"] = compute_cost_cents(ocr_m, "gemini-3.7-flash")
+        
+        sum_m = final_state.get("summary_metrics", {})
+        sum_m["cost_cents"] = compute_cost_cents(sum_m, "gemini-3.7-flash")
+        
+        tra_m = final_state.get("translation_metrics", {})
+        tra_m["cost_cents"] = compute_cost_cents(tra_m, "gemini-3.7-flash")
+        
+        aud_m = final_state.get("audio_metrics", {})
+        aud_m["cost_cents"] = compute_cost_cents(aud_m, "gemini-2.5-flash-preview-tts")
+
+        total_cost_cents = round(ocr_m["cost_cents"] + sum_m["cost_cents"] + tra_m["cost_cents"] + aud_m["cost_cents"], 4)
+        
+        if "english_summary_draft" in extracted_data:
+            del extracted_data["english_summary_draft"]
+
         record = {
             "job_id": transaction_id,
             "original_filename": filename,
+            "document_type": document_type,
+            "ocr_size_bytes": file_size_bytes,
             "title": title,
             "status": "completed",
             "source_file_date": source_date,
@@ -382,10 +468,19 @@ async def run_pipeline_core(
             "symbol": extracted_data.get("symbol"),
             "calling_name": callname,
             "summary_file": summary_file,
+            "summary_size_bytes": get_artifact_size(summary_file),
+            "summary_length_words": len(summary.split()),
             "translation_file": translation_file,
+            "translation_size_bytes": get_artifact_size(translation_file),
+            "translation_length_words": len(translation.split()),
             "audio_file": audio_file,
-            "english_summary": summary,
-            "urdu_summary": translation,
+            "audio_size_bytes": get_artifact_size(audio_file),
+            "thinking_level": "LOW",
+            "total_cost_cents": total_cost_cents,
+            "ocr_metrics": ocr_m,
+            "summary_metrics": sum_m,
+            "translation_metrics": tra_m,
+            "audio_metrics": aud_m,
         }
         await asyncio.to_thread(finalize_source_file, filename, record)
         active_jobs.pop(transaction_id, None)
@@ -455,8 +550,8 @@ def fail_source_file(filename: str, transaction_id: str, error: str) -> None:
 
 
 def parse_record_datetime(record: dict[str, Any]) -> datetime | None:
-    # Prefer source_file_date over completed_at if available
-    value = record.get("source_file_date") or record.get("completed_at")
+    # Prefer completed_at (json creation time) over source_file_date as requested by user
+    value = record.get("completed_at") or record.get("source_file_date")
     if not isinstance(value, str):
         return None
     try:
@@ -528,3 +623,176 @@ async def stop_folder_scanner() -> None:
 async def shutdown_folder_scanner() -> None:
     """Stop scanning after the current document finishes."""
     await stop_folder_scanner()
+
+audit_scanner_task: asyncio.Task | None = None
+audit_scanner_stop_event = asyncio.Event()
+
+def _run_audit_scan():
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "postgres"),
+            password=os.getenv("DB_PASSWORD", "postgres"),
+            dbname=os.getenv("DB_NAME", "postgres"),
+            port=os.getenv("DB_PORT", "5432"),
+        )
+        conn.autocommit = True
+    except Exception as e:
+        logger.error(f"Audit scanner failed to connect to DB: {e}")
+        return
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT model_name, input_cost_per_million, output_cost_per_million FROM model_pricing")
+            pricing = {row['model_name']: row for row in cur.fetchall()}
+            
+            manifests = Path(PROCESSED_DOCS_DIR).glob(f"*{MANIFEST_FILE_SUFFIX}")
+            for manifest_path in manifests:
+                try:
+                    with open(manifest_path, 'r', encoding='utf-8') as f:
+                        manifest = json.load(f)
+                    
+                    filename = manifest.get("original_filename")
+                    if not filename:
+                        continue
+                    
+                    cur.execute("SELECT 1 FROM audit_records WHERE filename = %s", (filename,))
+                    if cur.fetchone():
+                        continue
+                    
+                    completed_at = manifest.get("completed_at")
+                    company_name = manifest.get("company_name", "")
+                    symbol = manifest.get("symbol", "")
+                    
+                    def get_size_mb(fname):
+                        p = Path(PROCESSED_DOCS_DIR) / fname if fname else None
+                        if p and p.exists():
+                            return p.stat().st_size / (1024 * 1024)
+                        return 0.0
+
+                    base_name = Path(filename).stem
+                    ocr_size_mb = get_size_mb(filename)
+                    summary_file = manifest.get("summary_file", f"{base_name}{SUMMARY_FILE_SUFFIX}")
+                    summary_size_mb = get_size_mb(summary_file)
+                    translation_file = manifest.get("translation_file", f"{base_name}{TRANSLATION_FILE_SUFFIX}")
+                    translation_size_mb = get_size_mb(translation_file)
+                    audio_file = manifest.get("audio_file", f"{base_name}{AUDIO_FILE_SUFFIX}")
+                    audio_size_mb = get_size_mb(audio_file)
+                        
+                    en_text = manifest.get("english_summary", "")
+                    ur_text = manifest.get("urdu_summary", "")
+                    
+                    def get_total_tokens(metrics_key):
+                        metrics = manifest.get(metrics_key, {})
+                        if not isinstance(metrics, dict):
+                            return 0
+                        return metrics.get("input_tokens", 0) + metrics.get("output_tokens", 0)
+
+                    ocr_tokens = get_total_tokens("ocr_metrics")
+                    summary_tokens = get_total_tokens("summary_metrics")
+                    translation_tokens = get_total_tokens("translation_metrics")
+                    
+                    audio_metrics = manifest.get("audio_metrics", {})
+                    audio_tokens = audio_metrics.get("input_tokens", 0) if isinstance(audio_metrics, dict) else 0
+                    
+                    model_name = "gemini-3.7-flash"
+                    
+                    def get_cost(tokens, m_name):
+                        if not tokens:
+                            return 0.0
+                        if m_name in pricing:
+                            in_price = pricing[m_name]['input_cost_per_million']
+                            out_price = pricing[m_name]['output_cost_per_million']
+                            avg_price = (in_price + out_price) / 2
+                            return (tokens / 1000000.0) * float(avg_price)
+                        return (tokens / 1000000.0) * 0.1875
+                        
+                    ocr_cost_usd = get_cost(ocr_tokens, model_name)
+                    summary_cost_usd = get_cost(summary_tokens, model_name)
+                    translation_cost_usd = get_cost(translation_tokens, model_name)
+                    audio_cost_usd = get_cost(audio_tokens, model_name)
+                        
+                    cur.execute("""
+                        INSERT INTO audit_records (
+                            filename, symbol, company_name, completed_at, model_name,
+                            ocr_size_mb, ocr_tokens, ocr_cost_usd,
+                            summary_size_mb, summary_tokens, summary_cost_usd,
+                            translation_size_mb, translation_tokens, translation_cost_usd,
+                            audio_size_mb, audio_tokens, audio_cost_usd
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (filename) DO NOTHING
+                    """, (
+                        filename, symbol, company_name, completed_at, model_name,
+                        ocr_size_mb, ocr_tokens, ocr_cost_usd,
+                        summary_size_mb, summary_tokens, summary_cost_usd,
+                        translation_size_mb, translation_tokens, translation_cost_usd,
+                        audio_size_mb, audio_tokens, audio_cost_usd
+                    ))
+                except Exception as e:
+                    logger.error(f"Error processing manifest {manifest_path.name}: {e}")
+    finally:
+        conn.close()
+
+async def audit_scanner_loop():
+    while not audit_scanner_stop_event.is_set():
+        try:
+            await asyncio.to_thread(_run_audit_scan)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Audit scanner iteration failed")
+        
+        try:
+            await asyncio.wait_for(audit_scanner_stop_event.wait(), timeout=10)
+        except TimeoutError:
+            pass
+
+async def start_audit_scanner() -> None:
+    global audit_scanner_task
+    audit_scanner_stop_event.clear()
+    if audit_scanner_task is None or audit_scanner_task.done():
+        audit_scanner_task = asyncio.create_task(audit_scanner_loop(), name="briefcast-audit-scanner")
+
+async def stop_audit_scanner() -> None:
+    global audit_scanner_task
+    audit_scanner_stop_event.set()
+    task = audit_scanner_task
+    if task and not task.done() and task is not asyncio.current_task():
+        await task
+    audit_scanner_task = None
+
+@router.get("/api/audit/records", tags=["Audit"])
+async def get_audit_records():
+    def fetch_records():
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "postgres"),
+            password=os.getenv("DB_PASSWORD", "postgres"),
+            dbname=os.getenv("DB_NAME", "postgres"),
+            port=os.getenv("DB_PORT", "5432"),
+        )
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM audit_records ORDER BY completed_at DESC")
+                return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+    return await asyncio.to_thread(fetch_records)
+
+@router.get("/api/audit/daily", tags=["Audit"])
+async def get_audit_daily():
+    def fetch_daily():
+        conn = psycopg2.connect(
+            host=os.getenv("DB_HOST", "localhost"),
+            user=os.getenv("DB_USER", "postgres"),
+            password=os.getenv("DB_PASSWORD", "postgres"),
+            dbname=os.getenv("DB_NAME", "postgres"),
+            port=os.getenv("DB_PORT", "5432"),
+        )
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM audit_daily_summary ORDER BY audit_date DESC")
+                return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+    return await asyncio.to_thread(fetch_daily)

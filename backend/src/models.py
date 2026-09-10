@@ -81,6 +81,7 @@ class FinancialReportExtraction(BaseModel):
     currency_scale: str
     key_metrics: list[FinancialMetric]
     corporate_actions: CorporateAction | None = None
+    english_summary_draft: str
 
 
 @dataclass

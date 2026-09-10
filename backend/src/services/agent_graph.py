@@ -36,6 +36,7 @@ class DocumentState(TypedDict, total=False):
     urdu_summary: str
     audio_path: str
     pipeline_config: dict[str, Any]
+    ocr_metrics: dict[str, Any]
     summary_metrics: dict[str, Any]
     translation_metrics: dict[str, Any]
     audio_metrics: dict[str, Any]
@@ -75,13 +76,17 @@ def get_registry_csv() -> str:
         
     return _cached_registry_csv
 
-def extract_financial_data(text: str, model: str) -> dict[str, Any]:
+def extract_and_draft_summary(text: str, model: str, maximum_words: int) -> tuple[dict[str, Any], dict[str, int]]:
     registry_csv = get_registry_csv()
 
     prompt = (
         "Extract the title (from the subject line if given, otherwise extract a suitable title from the document). "
         "Extract the formal company name, official stock symbol, and conversational broadcast_callname. "
         "Also extract financial results and corporate actions.\n\n"
+        f"Additionally, write one concise English financial broadcast paragraph summarizing the data in english_summary_draft. "
+        f"Use active voice and no more than {maximum_words} words. "
+        "Refer to the company exclusively by its conversational broadcast_callname in the summary. "
+        "Preserve all important figures, dates, and corporate actions in the summary.\n\n"
         "IMPORTANT: Here is the official PSX registry (Symbol | Company | Callname). "
         "You MUST use your semantic understanding to perfectly match the company from the document to this list. "
         "If the company exists in this list, you MUST strictly use its official symbol and official callname from this list instead of inventing one. "
@@ -98,33 +103,24 @@ def extract_financial_data(text: str, model: str) -> dict[str, Any]:
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=FinancialReportExtraction,
-            temperature=0.0,
+            temperature=0.2,
+            thinking_config=types.ThinkingConfig(thinking_level="LOW"),
         ),
     )
     if response.parsed is None:
         raise ValueError("Gemini returned no structured financial data")
+    
+    usage = {
+        "input_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if getattr(response, "usage_metadata", None) else 0,
+        "output_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if getattr(response, "usage_metadata", None) else 0
+    }
+        
     if hasattr(response.parsed, "model_dump"):
-        return response.parsed.model_dump()
-    return dict(response.parsed)
+        return response.parsed.model_dump(), usage
+    return dict(response.parsed), usage
 
 
-def draft_summary(data: dict[str, Any], model: str, maximum_words: int, callname: str) -> str:
-    prompt = (
-        "Write one concise English financial broadcast paragraph from the JSON data below. "
-        f"Use active voice and no more than {maximum_words} words. "
-        f"Refer to the company exclusively as '{callname}' and use this name exactly once in the summary. "
-        "Do not use the formal company name or stock symbol. "
-        "Preserve all important figures, dates, and corporate actions.\n\n"
-        f"Data: {json_text(data)}"
-    )
-    response = get_gemini_client().models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.2),
-    )
-    if not response.text:
-        raise ValueError("Gemini returned no English summary")
-    return limit_words(response.text, maximum_words)
+# draft_summary is now combined into extract_and_draft_summary
 
 
 def translate_summary(summary: str, model: str) -> str:
@@ -137,11 +133,18 @@ def translate_summary(summary: str, model: str) -> str:
     response = get_gemini_client().models.generate_content(
         model=model,
         contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.1),
+        config=types.GenerateContentConfig(
+            temperature=0.1,
+            thinking_config=types.ThinkingConfig(thinking_level="LOW")
+        ),
     )
     if not response.text:
         raise ValueError("Gemini returned no Urdu translation")
-    return response.text.strip()
+    usage = {
+        "input_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if getattr(response, "usage_metadata", None) else 0,
+        "output_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if getattr(response, "usage_metadata", None) else 0
+    }
+    return response.text.strip(), usage
 
 
 def json_text(value: dict[str, Any]) -> str:
@@ -152,39 +155,39 @@ async def summarize_node(state: DocumentState) -> dict[str, Any]:
     if state.get("english_summary"):
         return {"summary_metrics": {"skipped": True, "reason": "Already exists in processed_files"}}
 
-    started = time.time()
     config = state.get("pipeline_config", {})
     model = config.get("summary_model", SUMMARY_MODEL)
     maximum_words = int(config.get("summary_max_words", SUMMARY_MAX_WORDS))
 
-    extracted_data = await asyncio.to_thread(
-        extract_financial_data, state["raw_text"], model
+    started_extract = time.time()
+    extracted_data, extract_usage = await asyncio.to_thread(
+        extract_and_draft_summary, state["raw_text"], model, maximum_words
     )
+    extract_duration = round(time.time() - started_extract, 2)
     
     company_name = extracted_data.get("company_name", "")
     symbol = extracted_data.get("symbol", "")
     
-    # We now perfectly rely on the LLM's semantic matching against the registry 
-    # injected during extract_financial_data
     callname = extracted_data.get("broadcast_callname") or ""
             
-    # Ultimate fallback
     if not callname:
         callname = company_name or symbol or ""
         
-    summary = await asyncio.to_thread(
-        draft_summary, extracted_data, model, maximum_words, callname
-    )
+    summary = extracted_data.get("english_summary_draft", "")
+    summary = limit_words(summary, maximum_words)
+    
     return {
         "english_summary": summary,
         "callname": callname,
         "summary_metrics": {
-            "duration_seconds": round(time.time() - started, 2),
+            "duration_seconds": extract_duration,
             "provider": "cloud",
             "model": model,
             "extracted_data": extracted_data,
             "extracted_name": company_name,
             "extracted_title": extracted_data.get("title"),
+            "input_tokens": extract_usage["input_tokens"],
+            "output_tokens": extract_usage["output_tokens"],
         },
     }
 
@@ -196,7 +199,7 @@ async def translate_node(state: DocumentState) -> dict[str, Any]:
     started = time.time()
     config = state.get("pipeline_config", {})
     model = config.get("translation_model", TRANSLATION_MODEL)
-    translation = await asyncio.to_thread(
+    translation, translation_usage = await asyncio.to_thread(
         translate_summary, state["english_summary"], model
     )
     return {
@@ -205,6 +208,8 @@ async def translate_node(state: DocumentState) -> dict[str, Any]:
             "duration_seconds": round(time.time() - started, 2),
             "provider": "cloud",
             "model": model,
+            "input_tokens": translation_usage["input_tokens"],
+            "output_tokens": translation_usage["output_tokens"],
         },
     }
 
@@ -257,55 +262,75 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
             ),
         )
 
-    try:
-        response = await get_gemini_client().aio.models.generate_content(
-            model=active_model,
-            contents=("Read this Urdu text in a clear Pakistani broadcast accent with a "
-                      f"{tone.lower()} tone:\n\n{urdu_text}"),
-            config=get_audio_config(),
-        )
-    except Exception as e:
-        error_str = str(e)
-        if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
-            if active_model == model:
-                import re
-                match = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d\.]+)s)?", error_str)
-                delay = 3600 # Default to 1 hour if parsing fails
-                if match:
-                    hours = int(match.group(1) or 0)
-                    minutes = int(match.group(2) or 0)
-                    seconds = float(match.group(3) or 0.0)
-                    delay = hours * 3600 + minutes * 60 + seconds
-                _flash_audio_quota_reset_time = time.time() + delay
-                
-                # Retry immediately with fallback model
-                active_model = FALLBACK_AUDIO_MODEL if model == AUDIO_MODEL else model
-                response = await get_gemini_client().aio.models.generate_content(
-                    model=active_model,
-                    contents=("Read this Urdu text in a clear Pakistani broadcast accent with a "
-                              f"{tone.lower()} tone:\n\n{urdu_text}"),
-                    config=get_audio_config(),
-                )
+    for attempt in range(3):
+        try:
+            response = await get_gemini_client().aio.models.generate_content(
+                model=active_model,
+                contents=urdu_text,
+                config=get_audio_config(),
+            )
+        except Exception as e:
+            error_str = str(e)
+            if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
+                if active_model == model:
+                    import re
+                    match = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d\.]+)s)?", error_str)
+                    delay = 3600 # Default to 1 hour if parsing fails
+                    if match:
+                        hours = int(match.group(1) or 0)
+                        minutes = int(match.group(2) or 0)
+                        seconds = float(match.group(3) or 0.0)
+                        delay = hours * 3600 + minutes * 60 + seconds
+                    _flash_audio_quota_reset_time = time.time() + delay
+                    
+                    # Switch to fallback model and retry
+                    active_model = FALLBACK_AUDIO_MODEL if model == AUDIO_MODEL else model
+                    continue
+                else:
+                    raise ValueError(f"Gemini API Quota Exceeded for fallback model: {e}")
             else:
-                raise ValueError(f"Gemini API Quota Exceeded for fallback model: {e}")
-        else:
-            raise
-    if not getattr(response, "candidates", None):
-        raise ValueError("Gemini returned no candidates.")
-        
-    candidate = response.candidates[0]
-    content = getattr(candidate, "content", None)
-    if content is None:
-        reason = getattr(candidate, "finish_reason", "unknown")
-        raise ValueError(f"Gemini returned no audio data (finish reason: {reason}).")
-        
-    parts = getattr(content, "parts", None)
-    if not parts:
-        raise ValueError("Gemini returned content but no parts.")
-        
-    inline_data = getattr(parts[0], "inline_data", None)
-    if inline_data is None or not getattr(inline_data, "data", None):
-        raise ValueError("Gemini returned an empty audio response")
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                    continue
+                raise
+
+        if not getattr(response, "candidates", None):
+            if attempt < 2:
+                await asyncio.sleep(2)
+                continue
+            raise ValueError("Gemini returned no candidates.")
+            
+        candidate = response.candidates[0]
+        content = getattr(candidate, "content", None)
+        if content is None:
+            reason = getattr(candidate, "finish_reason", "unknown")
+            if (str(reason) == "FinishReason.OTHER" or str(reason) == "OTHER") and attempt < 2:
+                await asyncio.sleep(2)
+                continue
+            if str(reason) == "FinishReason.OTHER" or str(reason) == "OTHER":
+                raise ValueError(f"Gemini TTS preview model failed to generate audio 3 times (FinishReason: OTHER).")
+            
+            if attempt < 2:
+                await asyncio.sleep(2)
+                continue
+            raise ValueError(f"Gemini returned no audio data (finish reason: {reason}).")
+            
+        parts = getattr(content, "parts", None)
+        if not parts:
+            if attempt < 2:
+                await asyncio.sleep(2)
+                continue
+            raise ValueError("Gemini returned content but no parts.")
+            
+        inline_data = getattr(parts[0], "inline_data", None)
+        if inline_data is None or not getattr(inline_data, "data", None):
+            if attempt < 2:
+                await asyncio.sleep(2)
+                continue
+            raise ValueError("Gemini returned an empty audio response")
+            
+        # Success!
+        break
 
     await asyncio.to_thread(
         write_mp3, inline_data.data, output_file, AUDIO_SAMPLE_RATE_HZ
@@ -313,7 +338,8 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
     return {
         "audio_path": state["audio_path"],
         "audio_metrics": {
-            "characters": len(urdu_text),
+            "input_tokens": len(urdu_text),
+            "output_tokens": 0,
             "duration_seconds": round(time.time() - started, 2),
             "provider": provider,
             "model": model,
