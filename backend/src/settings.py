@@ -16,6 +16,14 @@ SUMMARY_MODEL = "gemini-3.7-flash"
 TRANSLATION_MODEL = "gemini-3.7-flash"
 OCR_MODEL = "gemini-3.7-flash"
 AUDIO_MODEL = "gemini-2.5-flash-preview-tts"
+# Used dynamically by the pipeline if AUDIO_MODEL reaches its daily quota limits
+FALLBACK_AUDIO_MODEL = "gemini-3.1-flash-tts-preview"
+
+MODEL_OPTIONS = {
+    "summary": (SUMMARY_MODEL,),
+    "translation": (TRANSLATION_MODEL,),
+    "audio": (AUDIO_MODEL,),
+}
 
 # Flat artifact naming
 SUMMARY_FILE_SUFFIX = "_summary.txt"

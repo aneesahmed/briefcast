@@ -1,0 +1,35 @@
+2026-09-10 13:48:37,096 - INFO - Started server process [10456]
+2026-09-10 13:48:37,096 - INFO - Waiting for application startup.
+2026-09-10 13:48:37,096 - INFO - Application startup complete.
+2026-09-10 13:52:56,910 - INFO - Shutting down
+2026-09-10 13:52:57,019 - INFO - Waiting for application shutdown.
+2026-09-10 13:53:08,810 - INFO - Application shutdown complete.
+2026-09-10 13:53:08,810 - INFO - Finished server process [10456]
+2026-09-10 13:53:11,046 - INFO - Started server process [13160]
+2026-09-10 13:53:11,048 - INFO - Waiting for application startup.
+2026-09-10 13:53:11,050 - INFO - Application startup complete.
+2026-09-10 13:53:20,268 - INFO - Shutting down
+2026-09-10 13:53:20,379 - INFO - Waiting for application shutdown.
+2026-09-10 13:53:20,380 - INFO - Application shutdown complete.
+2026-09-10 13:53:20,380 - INFO - Finished server process [13160]
+2026-09-10 13:53:22,419 - INFO - Started server process [25952]
+2026-09-10 13:53:22,422 - INFO - Waiting for application startup.
+2026-09-10 13:53:22,425 - INFO - Application startup complete.
+2026-09-10 13:53:46,623 - INFO - Shutting down
+2026-09-10 13:53:46,734 - INFO - Waiting for application shutdown.
+2026-09-10 13:53:46,734 - INFO - Application shutdown complete.
+2026-09-10 13:53:46,734 - INFO - Finished server process [25952]
+2026-09-10 13:53:51,583 - INFO - Started server process [24048]
+2026-09-10 13:53:51,583 - INFO - Waiting for application startup.
+2026-09-10 13:53:51,583 - INFO - Application startup complete.
+2026-09-10 13:54:08,280 - INFO - Shutting down
+2026-09-10 13:54:08,390 - INFO - Waiting for application shutdown.
+2026-09-10 13:54:08,390 - INFO - Application shutdown complete.
+2026-09-10 13:54:08,390 - INFO - Finished server process [24048]
+2026-09-10 13:54:10,506 - INFO - Started server process [23448]
+2026-09-10 13:54:10,509 - INFO - Waiting for application startup.
+2026-09-10 13:54:10,511 - INFO - Application startup complete.
+2026-09-10 13:58:10,449 - INFO - Shutting down
+2026-09-10 13:58:10,559 - INFO - Waiting for application shutdown.
+2026-09-10 13:58:10,559 - INFO - Application shutdown complete.
+2026-09-10 13:58:10,559 - INFO - Finished server process [23448]

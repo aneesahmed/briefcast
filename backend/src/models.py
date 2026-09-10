@@ -5,16 +5,18 @@ from pydantic import BaseModel, field_validator
 from dataclasses import dataclass
 
 from src.core.config import (
-    AUDIO_MODEL,
     AUDIO_PROVIDER,
     DEFAULT_SPEECH_TONE,
     DEFAULT_VOICE_GENDER,
-    MODEL_OPTIONS,
     SUMMARY_MAX_WORDS,
-    SUMMARY_MODEL,
     SUMMARY_PROVIDER,
-    TRANSLATION_MODEL,
     TRANSLATION_PROVIDER,
+)
+from src.settings import (
+    AUDIO_MODEL,
+    MODEL_OPTIONS,
+    SUMMARY_MODEL,
+    TRANSLATION_MODEL,
 )
 
 

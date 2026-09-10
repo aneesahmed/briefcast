@@ -20,6 +20,7 @@ from src.core.config import (
 )
 from src.settings import (
     AUDIO_MODEL,
+    FALLBACK_AUDIO_MODEL,
     SUMMARY_MODEL,
     TRANSLATION_MODEL,
 )
@@ -243,8 +244,8 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
     started = time.time()
     
     active_model = model
-    if model == "gemini-2.5-flash-preview-tts" and time.time() < _flash_audio_quota_reset_time:
-        active_model = "gemini-3.1-flash-tts-preview"
+    if model == AUDIO_MODEL and time.time() < _flash_audio_quota_reset_time:
+        active_model = FALLBACK_AUDIO_MODEL
 
     def get_audio_config():
         return types.GenerateContentConfig(
@@ -277,8 +278,8 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
                     delay = hours * 3600 + minutes * 60 + seconds
                 _flash_audio_quota_reset_time = time.time() + delay
                 
-                # Retry immediately with Gemini 3.1 Flash
-                active_model = "gemini-3.1-flash-tts-preview" if model == "gemini-2.5-flash-preview-tts" else model.replace("gemini-2.5-flash", "gemini-3.1-flash")
+                # Retry immediately with fallback model
+                active_model = FALLBACK_AUDIO_MODEL if model == AUDIO_MODEL else model
                 response = await get_gemini_client().aio.models.generate_content(
                     model=active_model,
                     contents=("Read this Urdu text in a clear Pakistani broadcast accent with a "

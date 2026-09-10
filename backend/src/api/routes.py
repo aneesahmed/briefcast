@@ -12,11 +12,6 @@ from typing import Annotated, Any
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from src.api.routes import (
-    scanner_runtime_enabled,
-    shutdown_folder_scanner,
-    start_folder_scanner,
-)
 from src.settings import (
     AUDIO_FILE_SUFFIX,
     FAILED_FILES_DIR,
