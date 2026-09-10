@@ -77,3 +77,6 @@ test-mic.wav
 urdu_demo.wav
 urdu_demo_medium.wav
 urdu_transcript.txt
+backend/.env
+backend/runtime.bat
+__pycache__/
