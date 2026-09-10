@@ -28,23 +28,24 @@ class DocumentService:
                 if (page_text := page.extract_text())
             ).strip()
             
-            # If text is present, return it immediately
-            if text:
+            # If the extracted text is substantial (more than 15 words), return it.
+            # Otherwise (e.g. if it just says "CamScanner" or page numbers), treat it as an image-only PDF.
+            if len(text.split()) > 15:
                 return text
                 
             # If no text was found (image-only PDF), use Gemini File API to read the scanned document
             import os
             from google import genai
-            from src.core.config import SUMMARY_MODEL
+            from src.core.config import OCR_MODEL
             
             client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
             uploaded_file = client.files.upload(file=str(file_path))
             try:
                 response = client.models.generate_content(
-                    model=SUMMARY_MODEL,
+                    model=OCR_MODEL,
                     contents=[
                         uploaded_file, 
-                        "Extract all readable text from this scanned document exactly as written."
+                        "Extract only the English text from this scanned document. Ignore any Urdu, Arabic, or other languages. Output only the extracted English text."
                     ],
                 )
                 return response.text.strip() if response.text else ""

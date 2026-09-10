@@ -14,9 +14,11 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
 load_dotenv(BACKEND_DIR / ".env")
 BRIEFING_SOURCE_DIR = Path(r"C:\working\AI26\briefcast\briefing_source")
+PROCESSING_FILES_DIR = Path(r"C:\working\AI26\briefcast\processing_files")
 PROCESSED_FILES_DIR = Path(r"C:\working\AI26\briefcast\processed_files")
 FAILED_FILES_DIR = Path(r"C:\working\AI26\briefcast\failed_files")
 INPUT_DOCS_DIR = BRIEFING_SOURCE_DIR
+PROCESSING_DOCS_DIR = PROCESSING_FILES_DIR
 PROCESSED_DOCS_DIR = PROCESSED_FILES_DIR
 LOG_FILE_PATH = PROJECT_DIR / "briefcast.log"
 
@@ -40,10 +42,11 @@ SCANNER_INTERVAL_SECONDS = 5.0
 
 # Gemini text pipeline
 SUMMARY_PROVIDER = "cloud"
-SUMMARY_MODEL = "gemini-3.5-flash-lite"
+SUMMARY_MODEL = "gemini-3.7-flash"
 SUMMARY_MAX_WORDS = 120
 TRANSLATION_PROVIDER = "cloud"
-TRANSLATION_MODEL = "gemini-3.5-flash-lite"
+TRANSLATION_MODEL = "gemini-3.7-flash"
+OCR_MODEL = "gemini-3.7-flash"
 
 # Audio pipeline
 AUDIO_PROVIDER = "cloud"

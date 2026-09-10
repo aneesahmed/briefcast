@@ -173,7 +173,6 @@ async def get_audio_by_date(
                 "file_name": manifest.get("original_filename"),
                 "symbol": manifest.get("symbol"),
                 "company_name": manifest.get("company_name"),
-                "calling_name": manifest.get("calling_name"),
                 "audio_url": str(request.url_for("download_audio", filename=audio_file)),
             }
         )
@@ -205,11 +204,8 @@ def resolve_processed_file(filename: str) -> Path:
 
 def collision_safe_source_path(filename: str) -> Path:
     candidate = INPUT_DOCS_DIR / filename
-    if not source_name_in_use(candidate):
-        return candidate
-
-    timestamp = datetime.now(local_timezone).strftime("%Y%m%d_%H%M%S_%f")
-    return candidate.with_name(f"{candidate.stem}_{timestamp}{candidate.suffix}")
+    # Collision renaming disabled to allow reusing processed artifacts
+    return candidate
 
 
 def source_name_in_use(source_file: Path) -> bool:
@@ -281,19 +277,25 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
         if stop_when_paused and not scanner_runtime_enabled:
             break
 
-        if processed_artifacts_exist(source_file):
-            source_file = rename_colliding_source(source_file)
+        # Collision renaming removed as per user request.
+        # We will reuse existing artifacts or regenerate missing ones in-place.
 
         transaction_id = str(uuid.uuid4())
+        
+        # Move to processing folder for intermediate processing
+        from src.core.config import PROCESSING_DOCS_DIR
+        processing_file = Path(PROCESSING_DOCS_DIR) / source_file.name
+        source_file.replace(processing_file)
+        
         active_jobs[transaction_id] = {
             "id": transaction_id,
-            "filename": source_file.name,
+            "filename": processing_file.name,
             "status": "processing",
             "received_at": datetime.now(local_timezone).isoformat(),
         }
         
         start_time = time.time()
-        await process_scanner_file(source_file, transaction_id)
+        await process_scanner_file(processing_file, transaction_id)
         elapsed = time.time() - start_time
         
         timestamp = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M:%S")
@@ -335,9 +337,9 @@ async def run_pipeline_core(
                 "raw_text": content,
                 "filename": filename,
                 "output_dir": PROCESSED_DOCS_DIR,
-                "english_summary": "",
-                "urdu_summary": "",
-                "audio_path": audio_temporary,
+                "english_summary": (Path(PROCESSED_DOCS_DIR) / summary_file).read_text(encoding="utf-8") if (Path(PROCESSED_DOCS_DIR) / summary_file).exists() else "",
+                "urdu_summary": (Path(PROCESSED_DOCS_DIR) / translation_file).read_text(encoding="utf-8") if (Path(PROCESSED_DOCS_DIR) / translation_file).exists() else "",
+                "audio_path": audio_file if (Path(PROCESSED_DOCS_DIR) / audio_file).exists() else audio_temporary,
                 "pipeline_config": config.model_dump(),
                 "summary_metrics": {},
                 "translation_metrics": {},
@@ -357,9 +359,11 @@ async def run_pipeline_core(
         processed_dir = Path(PROCESSED_DOCS_DIR)
         write_text_atomic(processed_dir / summary_file, summary)
         write_text_atomic(processed_dir / translation_file, translation)
-        (processed_dir / audio_temporary).replace(processed_dir / audio_file)
+        if (processed_dir / audio_temporary).exists():
+            (processed_dir / audio_temporary).replace(processed_dir / audio_file)
 
-        source_file_path = Path(INPUT_DOCS_DIR) / filename
+        from src.core.config import PROCESSING_DOCS_DIR
+        source_file_path = Path(PROCESSING_DOCS_DIR) / filename
         if source_file_path.exists():
             source_date = datetime.fromtimestamp(source_file_path.stat().st_mtime, local_timezone).strftime("%Y-%m-%d")
         else:
@@ -412,7 +416,8 @@ def remove_generated_artifacts(base_name: str, audio_temporary: str) -> None:
 
 
 def finalize_source_file(filename: str, record: dict[str, Any]) -> None:
-    source_file = INPUT_DOCS_DIR / filename
+    from src.core.config import PROCESSING_DOCS_DIR
+    source_file = Path(PROCESSING_DOCS_DIR) / filename
     manifest_file = PROCESSED_DOCS_DIR / f"{Path(filename).stem}{MANIFEST_FILE_SUFFIX}"
     temporary_manifest = manifest_file.with_suffix(manifest_file.suffix + ".part")
     temporary_manifest.write_text(
@@ -424,7 +429,8 @@ def finalize_source_file(filename: str, record: dict[str, Any]) -> None:
 
 
 def fail_source_file(filename: str, transaction_id: str, error: str) -> None:
-    source_file = INPUT_DOCS_DIR / filename
+    from src.core.config import PROCESSING_DOCS_DIR
+    source_file = Path(PROCESSING_DOCS_DIR) / filename
     destination = FAILED_FILES_DIR / filename
     if destination.exists():
         timestamp = datetime.now(local_timezone).strftime("%Y%m%d_%H%M%S_%f")

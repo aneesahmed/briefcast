@@ -146,6 +146,9 @@ def json_text(value: dict[str, Any]) -> str:
 
 
 async def summarize_node(state: DocumentState) -> dict[str, Any]:
+    if state.get("english_summary"):
+        return {"summary_metrics": {"skipped": True, "reason": "Already exists in processed_files"}}
+
     started = time.time()
     config = state.get("pipeline_config", {})
     model = config.get("summary_model", SUMMARY_MODEL)
@@ -184,6 +187,9 @@ async def summarize_node(state: DocumentState) -> dict[str, Any]:
 
 
 async def translate_node(state: DocumentState) -> dict[str, Any]:
+    if state.get("urdu_summary"):
+        return {"translation_metrics": {"skipped": True, "reason": "Already exists in processed_files"}}
+        
     started = time.time()
     config = state.get("pipeline_config", {})
     model = config.get("translation_model", TRANSLATION_MODEL)
@@ -211,44 +217,91 @@ def write_mp3(pcm_bytes: bytes, output_file: Path, sample_rate: int) -> None:
     output_file.write_bytes(encoder.encode(pcm_bytes) + encoder.flush())
 
 
+_flash_audio_quota_reset_time = 0.0
+
 async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
-    output_file = Path(state["output_dir"]) / state["audio_path"]
+    global _flash_audio_quota_reset_time
+    urdu_text = state.get("urdu_summary", "")
+    if not urdu_text:
+        return {"audio_path": "", "audio_metrics": {}}
+
     config = state.get("pipeline_config", {})
     provider = config.get("audio_provider", AUDIO_PROVIDER)
     model = config.get("audio_model", AUDIO_MODEL)
-    urdu_text = state["urdu_summary"]
+    output_file = Path(state["output_dir"]) / state["audio_path"]
+    
+    if output_file.exists():
+        return {"audio_metrics": {"skipped": True, "reason": "Already exists in processed_files"}}
+
     gender = config.get("gender", DEFAULT_VOICE_GENDER)
     tone = config.get("tone", DEFAULT_SPEECH_TONE)
     voice = GEMINI_VOICE_BY_GENDER.get(
         gender, GEMINI_VOICE_BY_GENDER[DEFAULT_VOICE_GENDER]
     )
     started = time.time()
+    
+    active_model = model
+    if model == "gemini-2.5-flash-preview-tts" and time.time() < _flash_audio_quota_reset_time:
+        active_model = "gemini-3.1-flash-tts-preview"
 
-    response = await get_gemini_client().aio.models.generate_content(
-        model=model,
-        contents=(
-            "Read this Urdu text in a clear Pakistani broadcast accent with a "
-            f"{tone.lower()} tone:\n\n{urdu_text}"
-        ),
-        config=types.GenerateContentConfig(
+    def get_audio_config():
+        return types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
                 )
             ),
-        ),
-    )
-    if not response.candidates:
+        )
+
+    try:
+        response = await get_gemini_client().aio.models.generate_content(
+            model=active_model,
+            contents=("Read this Urdu text in a clear Pakistani broadcast accent with a "
+                      f"{tone.lower()} tone:\n\n{urdu_text}"),
+            config=get_audio_config(),
+        )
+    except Exception as e:
+        error_str = str(e)
+        if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
+            if active_model == model:
+                import re
+                match = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d\.]+)s)?", error_str)
+                delay = 3600 # Default to 1 hour if parsing fails
+                if match:
+                    hours = int(match.group(1) or 0)
+                    minutes = int(match.group(2) or 0)
+                    seconds = float(match.group(3) or 0.0)
+                    delay = hours * 3600 + minutes * 60 + seconds
+                _flash_audio_quota_reset_time = time.time() + delay
+                
+                # Retry immediately with Gemini 3.1 Flash
+                active_model = "gemini-3.1-flash-tts-preview" if model == "gemini-2.5-flash-preview-tts" else model.replace("gemini-2.5-flash", "gemini-3.1-flash")
+                response = await get_gemini_client().aio.models.generate_content(
+                    model=active_model,
+                    contents=("Read this Urdu text in a clear Pakistani broadcast accent with a "
+                              f"{tone.lower()} tone:\n\n{urdu_text}"),
+                    config=get_audio_config(),
+                )
+            else:
+                raise ValueError(f"Gemini API Quota Exceeded for fallback model: {e}")
+        else:
+            raise
+    if not getattr(response, "candidates", None):
         raise ValueError("Gemini returned no candidates.")
         
     candidate = response.candidates[0]
-    if not candidate.content or not candidate.content.parts:
+    content = getattr(candidate, "content", None)
+    if content is None:
         reason = getattr(candidate, "finish_reason", "unknown")
-        raise ValueError(f"Gemini returned no audio data (finish reason: {reason}). Text might have triggered a safety filter.")
+        raise ValueError(f"Gemini returned no audio data (finish reason: {reason}).")
         
-    inline_data = candidate.content.parts[0].inline_data
-    if inline_data is None or not inline_data.data:
+    parts = getattr(content, "parts", None)
+    if not parts:
+        raise ValueError("Gemini returned content but no parts.")
+        
+    inline_data = getattr(parts[0], "inline_data", None)
+    if inline_data is None or not getattr(inline_data, "data", None):
         raise ValueError("Gemini returned an empty audio response")
 
     await asyncio.to_thread(
