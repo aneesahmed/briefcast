@@ -291,7 +291,7 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
 
     if not valid_files:
         timestamp = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"[{timestamp}] Scanner checked folder: No files to process.")
+        logger.debug(f"[{timestamp}] Scanner checked folder: No files to process.")
         return
 
     for source_file in valid_files:
@@ -402,6 +402,22 @@ async def run_pipeline_core(
         extracted_title = metrics.get("extracted_title") or extracted_data.get("title")
         title = extracted_title or company_name or title_from_filename(filename)
         callname = final_state.get("callname", "")
+
+        # If we skipped generation, preserve these from the existing manifest
+        processed_dir = Path(PROCESSED_DOCS_DIR)
+        manifest_path = processed_dir / f"{Path(filename).stem}{MANIFEST_FILE_SUFFIX}"
+        if manifest_path.exists():
+            try:
+                import json
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    old_data = json.load(f)
+                company_name = company_name or old_data.get("company_name")
+                if "symbol" not in extracted_data or not extracted_data["symbol"]:
+                    extracted_data["symbol"] = old_data.get("symbol")
+                title = extracted_title or company_name or old_data.get("title") or title_from_filename(filename)
+                callname = callname or old_data.get("calling_name", "")
+            except Exception:
+                pass
 
         processed_dir = Path(PROCESSED_DOCS_DIR)
         write_text_atomic(processed_dir / summary_file, summary)

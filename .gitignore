@@ -80,3 +80,4 @@ urdu_transcript.txt
 backend/.env
 backend/runtime.bat
 __pycache__/
+backend/data/
