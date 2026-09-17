@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS audit_records (
     scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE OR REPLACE VIEW audit_daily_summary AS
+DROP VIEW IF EXISTS audit_daily_summary;
+CREATE VIEW audit_daily_summary AS
 SELECT 
     DATE(completed_at) as audit_date,
     COUNT(filename) as total_files,
