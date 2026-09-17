@@ -135,7 +135,7 @@ async def scan_now():
     return scanner_status()
 
 
-@router.get("/api/audio/by-date", tags=["Consumer Audio"])
+@router.get("/api/audio/by-date", tags=["Audio"])
 async def get_audio_by_date(
     request: Request,
     target_date: Annotated[
@@ -176,13 +176,14 @@ async def get_audio_by_date(
                 "symbol": manifest.get("symbol"),
                 "company_name": manifest.get("company_name"),
                 "audio_url": str(request.url_for("download_audio", filename=audio_file)),
+                "body": "voice_attached",
             }
         )
 
     return {"date": requested_date.isoformat(), "count": len(items), "items": items}
 
 
-@router.get("/api/audio/{filename}", name="download_audio", tags=["Consumer Audio"])
+@router.get("/api/audio/{filename}", name="download_audio", tags=["Audio"])
 async def download_audio(filename: str):
     """Download one generated Briefcast MP3."""
     if not filename.endswith(AUDIO_FILE_SUFFIX):

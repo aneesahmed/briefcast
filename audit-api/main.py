@@ -179,7 +179,10 @@ def get_audit_daily():
     try:
         cur = conn.cursor()
         cur.execute("SELECT * FROM audit_daily_summary ORDER BY audit_date DESC")
-        return [dict(r) for r in cur.fetchall()]
+        results = [dict(r) for r in cur.fetchall()]
+        for row in results:
+            row["body"] = "voice_attached"
+        return results
     finally:
         conn.close()
 
