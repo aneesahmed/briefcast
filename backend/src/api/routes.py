@@ -176,7 +176,7 @@ async def get_audio_by_date(
                 "symbol": manifest.get("symbol"),
                 "company_name": manifest.get("company_name"),
                 "audio_url": str(request.url_for("download_audio", filename=audio_file)),
-                "body": "voice_attached",
+                "body": "Voice Attached",
             }
         )
 

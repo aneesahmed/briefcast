@@ -260,6 +260,24 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
                 )
             ),
+            safety_settings=[
+                types.SafetySetting(
+                    category="HARM_CATEGORY_HARASSMENT",
+                    threshold="BLOCK_NONE"
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_HATE_SPEECH",
+                    threshold="BLOCK_NONE"
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    threshold="BLOCK_NONE"
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                    threshold="BLOCK_NONE"
+                ),
+            ]
         )
 
     for attempt in range(3):
@@ -304,11 +322,14 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         content = getattr(candidate, "content", None)
         if content is None:
             reason = getattr(candidate, "finish_reason", "unknown")
-            if (str(reason) == "FinishReason.OTHER" or str(reason) == "OTHER") and attempt < 2:
-                await asyncio.sleep(2)
-                continue
             if str(reason) == "FinishReason.OTHER" or str(reason) == "OTHER":
-                raise ValueError(f"Gemini TTS preview model failed to generate audio 3 times (FinishReason: OTHER).")
+                if active_model == AUDIO_MODEL:
+                    active_model = FALLBACK_AUDIO_MODEL
+                    continue
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                    continue
+                raise ValueError(f"Gemini TTS failed to generate audio (FinishReason: OTHER). Text might be fully blocked.")
             
             if attempt < 2:
                 await asyncio.sleep(2)
