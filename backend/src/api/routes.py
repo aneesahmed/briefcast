@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from src.core.security import create_download_token, verify_download_token, generate_new_key, set_new_key
+from src.core.security import encrypt_url, generate_new_key, set_new_key
 from fastapi.responses import FileResponse
 
 from src.settings import (
@@ -188,7 +188,7 @@ async def get_audio_by_date(
                 "file_name": manifest.get("original_filename"),
                 "symbol": manifest.get("symbol"),
                 "company_name": manifest.get("company_name"),
-                "audio_url": str(request.url_for("download_audio")) + "?token=" + create_download_token(audio_file),
+                "audio_url": encrypt_url(str(request.url_for("download_audio", filename=audio_file))),
                 "body": "Voice Attached",
             }
         )
@@ -196,12 +196,9 @@ async def get_audio_by_date(
     return {"date": requested_date.isoformat(), "count": len(items), "items": items}
 
 
-@router.get("/api/audio/secure", name="download_audio", tags=["Audio"])
-async def download_audio(token: str):
-    """Securely download an MP3 using an AES token."""
-    filename = verify_download_token(token)
-    if not filename:
-        raise HTTPException(status_code=403, detail="Invalid or expired token")
+@router.get("/api/audio/{filename}", name="download_audio", tags=["Audio"])
+async def download_audio(filename: str):
+    """Download one generated Briefcast MP3."""
     if not filename.endswith(AUDIO_FILE_SUFFIX):
         raise HTTPException(status_code=404, detail="Audio file not found")
     file_path = resolve_processed_file(filename)
