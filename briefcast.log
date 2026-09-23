@@ -398,3 +398,7 @@ RuntimeError: AUDIO_SECRET_KEY is missing! Please add it to your .env file.
 2026-09-23 15:12:50,267 - INFO - Waiting for application startup.
 2026-09-23 15:12:50,267 - INFO - Application startup complete.
 2026-09-23 15:12:50,267 - INFO - Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-09-23 16:04:33,652 - INFO - Shutting down
+2026-09-23 16:04:33,764 - INFO - Waiting for application shutdown.
+2026-09-23 16:04:33,765 - INFO - Application shutdown complete.
+2026-09-23 16:04:33,766 - INFO - Finished server process [28152]
