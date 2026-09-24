@@ -2,71 +2,67 @@ import asyncio
 import json
 import logging
 import sqlite3
-from datetime import datetime
 from pathlib import Path
+from src.settings import PROCESSED_DOCS_DIR
 
-import uvicorn
-from fastapi import FastAPI, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
+logger = logging.getLogger("uvicorn.info")
 
-# Setup directories relative to audit-api folder
-PROJECT_ROOT = Path(__file__).parent.parent
-PROCESSED_FILES_DIR = PROJECT_ROOT / "processed_files"
-FAILED_FILES_DIR = PROJECT_ROOT / "failed_files"
-DB_PATH = PROJECT_ROOT / "db-init" / "audit.db"
-INIT_SQL_PATH = PROJECT_ROOT / "db-init" / "init.sql"
+PROJECT_ROOT = PROCESSED_DOCS_DIR.parent
+DB_DIR = PROJECT_ROOT / "db-init"
+DB_PATH = DB_DIR / "audit.db"
+INIT_SQL_PATH = DB_DIR / "init.sql"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("audit_api")
-
-app = FastAPI(title="Briefcast Audit Dashboard API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+telemetry_task = None
+telemetry_stop_event = asyncio.Event()
 
 def get_db():
+    # Ensure db directory exists
+    DB_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    # Enable WAL mode
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
 def init_db():
+    # Only run init.sql if the database is completely empty (no tables)
     conn = get_db()
     try:
-        with open(INIT_SQL_PATH, 'r', encoding='utf-8') as f:
-            sql_script = f.read()
-        conn.executescript(sql_script)
-        conn.commit()
+        cur = conn.cursor()
+        cur.execute("SELECT count(name) FROM sqlite_master WHERE type='table' AND name='audit_records'")
+        if cur.fetchone()[0] == 1:
+            return  # Database already exists and has tables
+            
+        if INIT_SQL_PATH.exists():
+            with open(INIT_SQL_PATH, 'r', encoding='utf-8') as f:
+                sql_script = f.read()
+            conn.executescript(sql_script)
+            conn.commit()
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
     finally:
         conn.close()
 
-init_db()
-
 def _run_scan():
-    logger.info("Starting folder scan for dashboard...")
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute("SELECT model_name, input_cost_per_million, output_cost_per_million FROM model_pricing")
         pricing = {row['model_name']: dict(row) for row in cur.fetchall()}
         
-        manifests = list(PROCESSED_FILES_DIR.glob("*_manifest.json"))
+        # OPTIMIZATION: Get all filenames currently in the database to avoid reprocessing
+        cur.execute("SELECT filename FROM audit_records")
+        processed_filenames = {row['filename'] for row in cur.fetchall()}
+        
+        manifests = list(PROCESSED_DOCS_DIR.glob("*_manifest.json"))
         
         new_records = 0
         for manifest_path in manifests:
             try:
                 with open(manifest_path, 'r', encoding='utf-8') as f:
                     manifest = json.load(f)
-                
+                    
                 filename = manifest.get("original_filename")
-                if not filename:
+                if not filename or filename in processed_filenames:
                     continue
                 
                 cur.execute("SELECT completed_at FROM audit_records WHERE filename = ?", (filename,))
@@ -80,7 +76,7 @@ def _run_scan():
                 symbol = manifest.get("symbol", "")
                 
                 def get_size_mb(fname):
-                    p = PROCESSED_FILES_DIR / fname if fname else None
+                    p = PROCESSED_DOCS_DIR / fname if fname else None
                     if p and p.exists():
                         return p.stat().st_size / (1024 * 1024)
                     return 0.0
@@ -152,19 +148,35 @@ def _run_scan():
                 logger.error(f"Error processing manifest {manifest_path.name}: {e}")
         
         conn.commit()
-        logger.info(f"Scan complete. Updated {new_records} records.")
+        if new_records > 0:
+            logger.info(f"Telemetry Scan complete. Updated {new_records} records in audit.db.")
     except Exception as e:
-        logger.error(f"Scan failed: {e}")
+        logger.error(f"Telemetry scan failed: {e}")
     finally:
         conn.close()
 
-@app.post("/api/audit/scan")
-async def trigger_scan(background_tasks: BackgroundTasks):
-    background_tasks.add_task(_run_scan)
-    return {"status": "scanning"}
+async def telemetry_loop():
+    logger.info("Telemetry background scanner started.")
+    while not telemetry_stop_event.is_set():
+        await asyncio.to_thread(_run_scan)
+        try:
+            await asyncio.wait_for(telemetry_stop_event.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            pass
 
-@app.get("/api/audit/records")
-def get_audit_records():
+def start_telemetry_scanner():
+    global telemetry_task
+    init_db()
+    telemetry_stop_event.clear()
+    if telemetry_task is None or telemetry_task.done():
+        telemetry_task = asyncio.create_task(telemetry_loop(), name="briefcast-telemetry")
+
+async def stop_telemetry_scanner():
+    telemetry_stop_event.set()
+    if telemetry_task:
+        await telemetry_task
+
+def fetch_audit_records():
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -173,8 +185,7 @@ def get_audit_records():
     finally:
         conn.close()
 
-@app.get("/api/audit/daily")
-def get_audit_daily():
+def fetch_audit_daily():
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -185,7 +196,3 @@ def get_audit_daily():
         return results
     finally:
         conn.close()
-
-if __name__ == "__main__":
-    _run_scan()
-    uvicorn.run("main:app", host="0.0.0.0", port=82, reload=True)

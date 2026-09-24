@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Briefcast Telemetry</title>
+    <!-- Tailwind CSS (CDN for lightweight, zero-build setup) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans p-6">
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8 flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">Briefcast Telemetry Dashboard</h1>
+                <p class="text-sm text-gray-500 mt-1">Real-time pipeline monitoring & cost analytics</p>
+            </div>
+            <div class="flex items-center space-x-4">
+                <select id="dateFilter" onchange="applyFilters()" class="bg-white border border-gray-300 text-gray-700 rounded shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="all">All Time</option>
+                    <option value="7days">Last 7 Days</option>
+                    <option value="30days">Last 30 Days</option>
+                </select>
+                <select id="stepFilter" onchange="applyFilters()" class="bg-white border border-gray-300 text-gray-700 rounded shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="all">All Steps (Net Total)</option>
+                    <option value="ocr">OCR Extraction</option>
+                    <option value="summary">Summary Generation</option>
+                    <option value="translation">Urdu Translation</option>
+                    <option value="audio">Audio TTS</option>
+                </select>
+                <button onclick="fetchData()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded shadow transition-colors">
+                    Refresh
+                </button>
+            </div>
+        </header>
+
+        <!-- KPI Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white rounded-lg shadow p-6 border-l-4 border-indigo-500">
+                <p class="text-sm text-gray-500 font-medium">Total Documents</p>
+                <p id="kpi-total-docs" class="text-3xl font-bold text-gray-900 mt-2">-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6 border-l-4 border-emerald-500">
+                <p class="text-sm text-gray-500 font-medium">Total API Spend</p>
+                <p id="kpi-total-spend" class="text-3xl font-bold text-gray-900 mt-2">$-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6 border-l-4 border-amber-500">
+                <p class="text-sm text-gray-500 font-medium">Avg Cost / Document</p>
+                <p id="kpi-avg-cost" class="text-3xl font-bold text-gray-900 mt-2">$-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6 border-l-4 border-purple-500">
+                <p class="text-sm text-gray-500 font-medium">Total Tokens Used</p>
+                <p id="kpi-total-tokens" class="text-3xl font-bold text-gray-900 mt-2">-</p>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+            <!-- Cost Breakdown -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-lg font-semibold mb-4 text-gray-800">Cost Breakdown by Stage</h2>
+                <div class="relative h-64 w-full flex justify-center">
+                    <canvas id="costBreakdownChart"></canvas>
+                </div>
+            </div>
+            <!-- Daily Spend -->
+            <div class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-lg font-semibold mb-4 text-gray-800">Daily API Spend</h2>
+                <div class="relative h-64 w-full">
+                    <canvas id="dailySpendChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audit Log Table -->
+        <div class="bg-white rounded-lg shadow overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-800">Recent Processing Log</h2>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Document</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tokens</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cost</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-table-body" class="bg-white divide-y divide-gray-200">
+                        <!-- Rows injected via JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="/dashboard/app.js"></script>
+</body>
+</html>

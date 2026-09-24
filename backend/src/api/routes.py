@@ -652,3 +652,15 @@ async def shutdown_folder_scanner() -> None:
     """Stop scanning after the current document finishes."""
     await stop_folder_scanner()
 
+
+@router.get("/api/audit/records", tags=["Telemetry Dashboard"])
+def get_audit_records():
+    """Returns the full list of processed documents with individual token and cost metrics."""
+    from src.services.telemetry import fetch_audit_records
+    return fetch_audit_records()
+
+@router.get("/api/audit/daily", tags=["Telemetry Dashboard"])
+def get_audit_daily():
+    """Returns daily aggregations of file counts, token usage, and total costs."""
+    from src.services.telemetry import fetch_audit_daily
+    return fetch_audit_daily()

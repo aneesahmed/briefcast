@@ -8,6 +8,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from fastapi.staticfiles import StaticFiles
 
 from src.api.routes import (
     router as api_router,
@@ -17,6 +18,7 @@ from src.api.routes import (
     shutdown_folder_scanner,
     start_folder_scanner,
 )
+from src.services.telemetry import start_telemetry_scanner, stop_telemetry_scanner
 from src.settings import LOG_FILE_PATH
 
 # Configure logging to write to both console and file
@@ -33,8 +35,14 @@ async def lifespan(app: FastAPI):
             await start_folder_scanner()
         except RuntimeError as exc:
             logger.warning("Automatic scanner is paused: %s", exc)
+    
+    # Start the 10-second telemetry background scanner
+    start_telemetry_scanner()
+    
     yield
+    
     await shutdown_folder_scanner()
+    await stop_telemetry_scanner()
 
 
 app = FastAPI(
@@ -53,6 +61,9 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+# Mount the static HTML/JS dashboard
+app.mount("/dashboard", StaticFiles(directory="dashboard", html=True), name="dashboard")
 
 
 def custom_openapi():
