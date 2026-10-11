@@ -44,6 +44,8 @@ async def init_audit_db():
                 audio_input_tokens INTEGER DEFAULT 0,
                 audio_output_tokens INTEGER DEFAULT 0,
                 
+                audio_duration_seconds REAL DEFAULT 0.0,
+                
                 is_legacy_estimate BOOLEAN DEFAULT 0
             )
         """)
@@ -137,6 +139,20 @@ async def process_manifest(manifest_path: Path, db: aiosqlite.Connection, pricin
         
     total_tokens = sum([ocr_in, ocr_out, sum_in, sum_out, tra_in, tra_out, aud_in, aud_out])
     
+    audio_duration = data.get("audio_duration_seconds")
+    if audio_duration is None:
+        try:
+            audio_file = data.get("audio_file")
+            if audio_file:
+                audio_path = Path(PROCESSED_DOCS_DIR) / audio_file
+                if audio_path.exists():
+                    from mutagen.mp3 import MP3
+                    audio_obj = MP3(str(audio_path))
+                    audio_duration = round(audio_obj.info.length, 2)
+        except Exception:
+            pass
+    audio_duration = float(audio_duration or 0.0)
+    
     await db.execute("""
         INSERT INTO audit_records (
             filename, job_id, company_name, symbol, completed_at,
@@ -145,11 +161,12 @@ async def process_manifest(manifest_path: Path, db: aiosqlite.Connection, pricin
             summary_input_tokens, summary_output_tokens,
             translation_input_tokens, translation_output_tokens,
             audio_input_tokens, audio_output_tokens,
+            audio_duration_seconds,
             is_legacy_estimate
         ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         ) ON CONFLICT(filename) DO UPDATE SET
             job_id=excluded.job_id,
             company_name=excluded.company_name,
@@ -169,12 +186,13 @@ async def process_manifest(manifest_path: Path, db: aiosqlite.Connection, pricin
             translation_output_tokens=excluded.translation_output_tokens,
             audio_input_tokens=excluded.audio_input_tokens,
             audio_output_tokens=excluded.audio_output_tokens,
+            audio_duration_seconds=excluded.audio_duration_seconds,
             is_legacy_estimate=excluded.is_legacy_estimate
     """, (
         filename, job_id, company_name, symbol, completed_at,
         total_cost, ocr_cost, sum_cost, tra_cost, aud_cost,
         total_tokens, ocr_in, ocr_out, sum_in, sum_out, tra_in, tra_out, aud_in, aud_out,
-        is_legacy
+        audio_duration, is_legacy
     ))
 
 async def run_audit_scanner_loop():

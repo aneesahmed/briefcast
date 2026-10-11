@@ -12,19 +12,19 @@ from google.genai import types
 from src.core.config import (
     AUDIO_PROVIDER,
     AUDIO_SAMPLE_RATE_HZ,
-    DEFAULT_SPEECH_TONE,
     DEFAULT_VOICE_GENDER,
     GEMINI_VOICE_BY_GENDER,
     MP3_BIT_RATE_KBPS,
     SUMMARY_MAX_WORDS,
 )
+from src.models import FinancialReportExtraction
+from src.services.pricing import estimate_audio_output_tokens, usage_from_response
 from src.settings import (
     AUDIO_MODEL,
     FALLBACK_AUDIO_MODEL,
     SUMMARY_MODEL,
     TRANSLATION_MODEL,
 )
-from src.models import FinancialReportExtraction
 
 
 class DocumentState(TypedDict, total=False):
@@ -60,8 +60,7 @@ _last_pkl_mtime = 0.0
 
 def get_registry_csv() -> str:
     global _cached_registry_csv, _last_pkl_mtime
-    from scripts.name_calling import StockRegistry, DEFAULT_DB_PATH
-    import os
+    from scripts.name_calling import DEFAULT_DB_PATH, StockRegistry
     
     try:
         current_mtime = os.path.getmtime(DEFAULT_DB_PATH)
@@ -110,10 +109,7 @@ def extract_and_draft_summary(text: str, model: str, maximum_words: int) -> tupl
     if response.parsed is None:
         raise ValueError("Gemini returned no structured financial data")
     
-    usage = {
-        "input_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if getattr(response, "usage_metadata", None) else 0,
-        "output_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if getattr(response, "usage_metadata", None) else 0
-    }
+    usage = usage_from_response(response, model)
         
     if hasattr(response.parsed, "model_dump"):
         return response.parsed.model_dump(), usage
@@ -123,7 +119,7 @@ def extract_and_draft_summary(text: str, model: str, maximum_words: int) -> tupl
 # draft_summary is now combined into extract_and_draft_summary
 
 
-def translate_summary(summary: str, model: str) -> str:
+def translate_summary(summary: str, model: str) -> tuple[str, dict[str, Any]]:
     prompt = (
         "Translate this financial broadcast into formal, natural Pakistani Urdu. "
         "Preserve all company names, numerical values, dates, and financial meaning. "
@@ -140,10 +136,7 @@ def translate_summary(summary: str, model: str) -> str:
     )
     if not response.text:
         raise ValueError("Gemini returned no Urdu translation")
-    usage = {
-        "input_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if getattr(response, "usage_metadata", None) else 0,
-        "output_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if getattr(response, "usage_metadata", None) else 0
-    }
+    usage = usage_from_response(response, model)
     return response.text.strip(), usage
 
 
@@ -242,13 +235,13 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         return {"audio_metrics": {"skipped": True, "reason": "Already exists in processed_files"}}
 
     gender = config.get("gender", DEFAULT_VOICE_GENDER)
-    tone = config.get("tone", DEFAULT_SPEECH_TONE)
     voice = GEMINI_VOICE_BY_GENDER.get(
         gender, GEMINI_VOICE_BY_GENDER[DEFAULT_VOICE_GENDER]
     )
     started = time.time()
     
     active_model = model
+    billable_requests: list[dict[str, Any]] = []
     if model == AUDIO_MODEL and time.time() < _flash_audio_quota_reset_time:
         active_model = FALLBACK_AUDIO_MODEL
 
@@ -312,6 +305,9 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
                     continue
                 raise
 
+        request_usage = usage_from_response(response, active_model)
+        billable_requests.append(request_usage)
+
         if not getattr(response, "candidates", None):
             if attempt < 2:
                 await asyncio.sleep(2)
@@ -329,7 +325,7 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
                 if attempt < 2:
                     await asyncio.sleep(2)
                     continue
-                raise ValueError(f"Gemini TTS failed to generate audio (FinishReason: OTHER). Text might be fully blocked.")
+                raise ValueError("Gemini TTS failed to generate audio (FinishReason: OTHER). Text might be fully blocked.")
             
             if attempt < 2:
                 await asyncio.sleep(2)
@@ -353,17 +349,28 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         # Success!
         break
 
-    await asyncio.to_thread(
-        write_mp3, inline_data.data, output_file, AUDIO_SAMPLE_RATE_HZ
-    )
+    pcm_bytes = inline_data.data
+    if billable_requests and billable_requests[-1]["output_tokens"] == 0:
+        duration_seconds = len(pcm_bytes) / (AUDIO_SAMPLE_RATE_HZ * 2)
+        estimated_tokens = estimate_audio_output_tokens(duration_seconds, active_model)
+        billable_requests[-1]["output_tokens"] = estimated_tokens
+        billable_requests[-1]["total_tokens"] += estimated_tokens
+        billable_requests[-1]["output_tokens_estimated"] = True
+
+    await asyncio.to_thread(write_mp3, pcm_bytes, output_file, AUDIO_SAMPLE_RATE_HZ)
+    input_tokens = sum(request["input_tokens"] for request in billable_requests)
+    output_tokens = sum(request["output_tokens"] for request in billable_requests)
+    thinking_tokens = sum(request["thinking_tokens"] for request in billable_requests)
     return {
         "audio_path": state["audio_path"],
         "audio_metrics": {
-            "input_tokens": len(urdu_text),
-            "output_tokens": 0,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "thinking_tokens": thinking_tokens,
             "duration_seconds": round(time.time() - started, 2),
             "provider": provider,
-            "model": model,
+            "model": active_model,
+            "billable_requests": billable_requests,
         },
     }
 

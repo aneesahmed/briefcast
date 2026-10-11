@@ -8,9 +8,9 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 -- Insert default pricing from settings.py
 INSERT INTO model_pricing (model_name, input_cost_per_million, output_cost_per_million)
 VALUES 
-    ('gemini-3.7-flash', 0.075, 0.30),
-    ('gemini-2.5-flash-preview-tts', 0.15, 0.60),
-    ('gemini-3.1-flash-tts-preview', 0.15, 0.60)
+    ('gemini-3.7-flash', 0.75, 3.75),
+    ('gemini-2.5-flash-preview-tts', 0.50, 10.00),
+    ('gemini-3.1-flash-tts-preview', 1.00, 20.00)
 ON CONFLICT (model_name) DO UPDATE 
 SET input_cost_per_million = EXCLUDED.input_cost_per_million,
     output_cost_per_million = EXCLUDED.output_cost_per_million,
@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS audit_records (
 DROP VIEW IF EXISTS audit_daily_summary;
 CREATE VIEW audit_daily_summary AS
 SELECT 
-    DATE(completed_at) as audit_date,
+    -- completed_at is stored with its local UTC offset. substr preserves the
+    -- business date; SQLite DATE() would normalize +05:00 values back to UTC.
+    SUBSTR(completed_at, 1, 10) as audit_date,
     COUNT(filename) as total_files,
     
     -- OCR Totals
@@ -82,5 +84,5 @@ SELECT
     SUM(net_tokens) as total_net_tokens,
     SUM(net_cost_usd) as total_net_cost_usd
 FROM audit_records
-GROUP BY DATE(completed_at)
+GROUP BY SUBSTR(completed_at, 1, 10)
 ORDER BY audit_date DESC;

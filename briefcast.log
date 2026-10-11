@@ -418,3 +418,145 @@ RuntimeError: AUDIO_SECRET_KEY is missing! Please add it to your .env file.
 2026-09-24 01:01:19,537 - INFO - Waiting for application shutdown.
 2026-09-24 01:01:19,537 - INFO - Application shutdown complete.
 2026-09-24 01:01:19,537 - INFO - Finished server process [27284]
+2026-09-24 01:01:33,488 - INFO - Started server process [17768]
+2026-09-24 01:01:33,488 - INFO - Waiting for application startup.
+2026-09-24 01:01:33,499 - INFO - Application startup complete.
+2026-09-29 14:11:48,764 - INFO - Started server process [12152]
+2026-09-29 14:11:48,764 - INFO - Waiting for application startup.
+2026-09-29 14:11:48,764 - INFO - Application startup complete.
+2026-09-29 14:13:56,681 - INFO - Started server process [17728]
+2026-09-29 14:13:56,681 - INFO - Waiting for application startup.
+2026-09-29 14:13:56,694 - INFO - Application startup complete.
+2026-09-29 14:13:56,694 - ERROR - [Errno 10048] error while attempting to bind on address ('0.0.0.0', 8000): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+2026-09-29 14:13:56,695 - INFO - Waiting for application shutdown.
+2026-09-29 14:13:56,742 - INFO - Application shutdown complete.
+2026-09-29 14:23:20,992 - INFO - Shutting down
+2026-09-29 14:23:21,102 - INFO - Waiting for application shutdown.
+2026-09-29 14:23:21,105 - INFO - Application shutdown complete.
+2026-09-29 14:23:21,105 - INFO - Finished server process [12152]
+2026-09-29 14:23:23,043 - INFO - Started server process [13680]
+2026-09-29 14:23:23,043 - INFO - Waiting for application startup.
+2026-09-29 14:23:23,047 - INFO - Application startup complete.
+2026-09-29 15:37:38,074 - INFO - Shutting down
+2026-09-29 15:37:38,185 - INFO - Waiting for application shutdown.
+2026-09-29 15:37:38,185 - INFO - Application shutdown complete.
+2026-09-29 15:37:38,185 - INFO - Finished server process [13680]
+2026-09-29 15:37:42,907 - INFO - Started server process [23384]
+2026-09-29 15:37:42,907 - INFO - Waiting for application startup.
+2026-09-29 15:37:42,926 - INFO - Application startup complete.
+2026-09-29 15:53:51,644 - INFO - Shutting down
+2026-09-29 15:53:51,755 - INFO - Waiting for application shutdown.
+2026-09-29 15:53:51,755 - INFO - Application shutdown complete.
+2026-09-29 15:53:51,755 - INFO - Finished server process [23384]
+2026-09-29 15:55:11,941 - INFO - Started server process [6372]
+2026-09-29 15:55:11,941 - INFO - Waiting for application startup.
+2026-09-29 15:55:11,954 - INFO - Application startup complete.
+2026-09-29 15:57:18,697 - INFO - Shutting down
+2026-09-29 15:57:18,808 - INFO - Waiting for application shutdown.
+2026-09-29 15:57:18,809 - INFO - Application shutdown complete.
+2026-09-29 15:57:18,809 - INFO - Finished server process [6372]
+2026-09-29 15:57:21,190 - INFO - Started server process [22716]
+2026-09-29 15:57:21,192 - INFO - Waiting for application startup.
+2026-09-29 15:57:21,198 - INFO - Application startup complete.
+2026-09-29 15:57:32,087 - INFO - Shutting down
+2026-09-29 15:57:32,189 - INFO - Waiting for application shutdown.
+2026-09-29 15:57:32,189 - INFO - Application shutdown complete.
+2026-09-29 15:57:32,189 - INFO - Finished server process [22716]
+2026-09-29 15:57:33,950 - INFO - Started server process [2624]
+2026-09-29 15:57:33,955 - INFO - Waiting for application startup.
+2026-09-29 15:57:33,957 - INFO - Application startup complete.
+2026-09-29 15:58:09,721 - INFO - Shutting down
+2026-09-29 15:58:09,833 - INFO - Waiting for application shutdown.
+2026-09-29 15:58:09,833 - INFO - Application shutdown complete.
+2026-09-29 15:58:09,833 - INFO - Finished server process [2624]
+2026-09-29 15:58:11,593 - INFO - Started server process [20016]
+2026-09-29 15:58:11,594 - INFO - Waiting for application startup.
+2026-09-29 15:58:11,594 - INFO - Application startup complete.
+2026-09-29 15:58:57,951 - INFO - Shutting down
+2026-09-29 15:58:58,063 - INFO - Waiting for application shutdown.
+2026-09-29 15:58:58,063 - INFO - Application shutdown complete.
+2026-09-29 15:58:58,063 - INFO - Finished server process [20016]
+2026-09-29 15:58:59,956 - INFO - Started server process [21108]
+2026-09-29 15:58:59,956 - INFO - Waiting for application startup.
+2026-09-29 15:58:59,976 - INFO - Application startup complete.
+2026-09-29 15:59:23,603 - INFO - Shutting down
+2026-09-29 15:59:23,717 - INFO - Waiting for application shutdown.
+2026-09-29 15:59:23,717 - INFO - Application shutdown complete.
+2026-09-29 15:59:23,717 - INFO - Finished server process [21108]
+2026-09-29 15:59:25,464 - INFO - Started server process [17152]
+2026-09-29 15:59:25,464 - INFO - Waiting for application startup.
+2026-09-29 15:59:25,474 - INFO - Application startup complete.
+2026-09-29 15:59:30,698 - INFO - Shutting down
+2026-09-29 15:59:30,799 - INFO - Waiting for application shutdown.
+2026-09-29 15:59:30,800 - INFO - Application shutdown complete.
+2026-09-29 15:59:30,800 - INFO - Finished server process [17152]
+2026-09-29 15:59:32,512 - INFO - Started server process [21544]
+2026-09-29 15:59:32,512 - INFO - Waiting for application startup.
+2026-09-29 15:59:32,524 - INFO - Application startup complete.
+2026-09-29 16:03:26,518 - INFO - Shutting down
+2026-09-29 16:03:26,618 - INFO - Waiting for application shutdown.
+2026-09-29 16:03:26,618 - INFO - Application shutdown complete.
+2026-09-29 16:03:26,619 - INFO - Finished server process [21544]
+2026-09-29 16:03:28,607 - INFO - Started server process [596]
+2026-09-29 16:03:28,607 - INFO - Waiting for application startup.
+2026-09-29 16:03:28,637 - INFO - Application startup complete.
+2026-09-29 16:03:34,717 - INFO - Shutting down
+2026-09-29 16:03:34,833 - INFO - Waiting for application shutdown.
+2026-09-29 16:03:34,833 - INFO - Application shutdown complete.
+2026-09-29 16:03:34,833 - INFO - Finished server process [596]
+2026-09-29 16:03:36,575 - INFO - Started server process [21128]
+2026-09-29 16:03:36,575 - INFO - Waiting for application startup.
+2026-09-29 16:03:36,593 - INFO - Application startup complete.
+2026-09-29 16:03:53,510 - INFO - Shutting down
+2026-09-29 16:03:53,612 - INFO - Waiting for application shutdown.
+2026-09-29 16:03:53,613 - INFO - Application shutdown complete.
+2026-09-29 16:03:53,613 - INFO - Finished server process [21128]
+2026-09-29 16:03:55,308 - INFO - Started server process [19960]
+2026-09-29 16:03:55,308 - INFO - Waiting for application startup.
+2026-09-29 16:03:55,332 - INFO - Application startup complete.
+2026-09-29 16:04:27,049 - INFO - Shutting down
+2026-09-29 16:04:27,151 - INFO - Waiting for application shutdown.
+2026-09-29 16:04:27,151 - INFO - Application shutdown complete.
+2026-09-29 16:04:27,152 - INFO - Finished server process [19960]
+2026-09-29 16:04:29,280 - INFO - Started server process [22124]
+2026-09-29 16:04:29,280 - INFO - Waiting for application startup.
+2026-09-29 16:04:29,297 - INFO - Application startup complete.
+2026-09-29 16:04:41,750 - INFO - Shutting down
+2026-09-29 16:04:41,860 - INFO - Waiting for application shutdown.
+2026-09-29 16:04:41,861 - INFO - Application shutdown complete.
+2026-09-29 16:04:41,861 - INFO - Finished server process [22124]
+2026-09-29 16:04:43,757 - INFO - Started server process [20148]
+2026-09-29 16:04:43,757 - INFO - Waiting for application startup.
+2026-09-29 16:04:43,775 - INFO - Application startup complete.
+2026-09-29 16:10:52,692 - INFO - Shutting down
+2026-09-29 16:10:52,802 - INFO - Waiting for application shutdown.
+2026-09-29 16:10:52,803 - INFO - Application shutdown complete.
+2026-09-29 16:10:52,803 - INFO - Finished server process [20148]
+2026-09-29 16:10:54,450 - INFO - Started server process [20092]
+2026-09-29 16:10:54,450 - INFO - Waiting for application startup.
+2026-09-29 16:10:54,464 - INFO - Application startup complete.
+2026-09-29 16:11:04,314 - INFO - Shutting down
+2026-09-29 16:11:04,426 - INFO - Waiting for application shutdown.
+2026-09-29 16:11:04,427 - INFO - Application shutdown complete.
+2026-09-29 16:11:04,427 - INFO - Finished server process [20092]
+2026-09-29 16:11:06,005 - INFO - Started server process [21592]
+2026-09-29 16:11:06,005 - INFO - Waiting for application startup.
+2026-09-29 16:11:06,021 - INFO - Application startup complete.
+2026-09-29 16:12:23,142 - INFO - Shutting down
+2026-09-29 16:12:23,255 - INFO - Waiting for application shutdown.
+2026-09-29 16:12:23,255 - INFO - Application shutdown complete.
+2026-09-29 16:12:23,255 - INFO - Finished server process [21592]
+2026-09-29 16:12:28,900 - INFO - Started server process [23332]
+2026-09-29 16:12:28,900 - INFO - Waiting for application startup.
+2026-09-29 16:12:28,919 - INFO - Application startup complete.
+2026-09-30 00:18:57,324 - INFO - Shutting down
+2026-09-30 00:18:57,433 - INFO - Waiting for application shutdown.
+2026-09-30 00:18:57,433 - INFO - Application shutdown complete.
+2026-09-30 00:18:57,433 - INFO - Finished server process [23332]
+2026-10-11 20:17:12,694 - INFO - Started server process [12008]
+2026-10-11 20:17:12,694 - INFO - Waiting for application startup.
+2026-10-11 20:17:12,722 - INFO - Application startup complete.
+2026-10-11 20:37:26,908 - INFO - Shutting down
+2026-10-11 20:37:27,018 - INFO - Waiting for application shutdown.
+2026-10-11 20:37:27,018 - INFO - Application shutdown complete.
+2026-10-11 20:37:27,018 - INFO - Finished server process [12008]

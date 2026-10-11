@@ -81,3 +81,7 @@ backend/.env
 backend/runtime.bat
 __pycache__/
 backend/data/
+*.zip
+*.7z
+*.tar
+*.gz

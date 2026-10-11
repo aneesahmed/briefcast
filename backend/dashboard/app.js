@@ -37,15 +37,16 @@ function applyFilters() {
         filteredRecords = filteredRecords.filter(r => new Date(r.completed_at) >= cutoffDate);
     }
     
-    updateKPIs(filteredDaily, stepFilter);
+    updateKPIs(filteredDaily, filteredRecords, stepFilter);
     updateCharts(filteredDaily, stepFilter);
     updateTable(filteredRecords, stepFilter);
 }
 
-function updateKPIs(dailyData, stepFilter) {
+function updateKPIs(dailyData, recordsData, stepFilter) {
     let totalDocs = 0;
     let totalSpend = 0;
     let totalTokens = 0;
+    let totalAudio = 0;
     
     dailyData.forEach(day => {
         totalDocs += day.total_files;
@@ -57,6 +58,12 @@ function updateKPIs(dailyData, stepFilter) {
             totalTokens += day[`total_${stepFilter}_tokens`];
         }
     });
+
+    recordsData.forEach(record => {
+        if (record.audio_size_mb > 0 || record.audio_tokens > 0) {
+            totalAudio++;
+        }
+    });
     
     const avgCost = totalDocs > 0 ? (totalSpend / totalDocs) : 0;
     
@@ -64,6 +71,7 @@ function updateKPIs(dailyData, stepFilter) {
     document.getElementById('kpi-total-spend').innerText = `$${totalSpend.toFixed(4)}`;
     document.getElementById('kpi-avg-cost').innerText = `$${avgCost.toFixed(4)}`;
     document.getElementById('kpi-total-tokens').innerText = totalTokens.toLocaleString();
+    document.getElementById('kpi-total-audio').innerText = totalAudio.toLocaleString();
 }
 
 function updateCharts(dailyData, stepFilter) {

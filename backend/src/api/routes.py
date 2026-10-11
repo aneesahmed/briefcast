@@ -3,34 +3,36 @@ import json
 import logging
 import os
 import shutil
-import uuid
 import time
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from src.core.security import encrypt_url, generate_new_key, set_new_key
 from fastapi.responses import FileResponse
+from mutagen.mp3 import MP3
 
+from src.core.config import (
+    SCANNER_ENABLED,
+    SCANNER_INTERVAL_SECONDS,
+    SUPPORTED_DOCUMENT_EXTENSIONS,
+)
+from src.core.security import encrypt_url, generate_new_key, set_new_key
+from src.models import PipelineConfig
+from src.services.agent_graph import document_graph
+from src.services.document_service import DocumentService
+from src.services.pricing import calculate_cost_cents
 from src.settings import (
     AUDIO_FILE_SUFFIX,
+    ERROR_FILE_SUFFIX,
     FAILED_FILES_DIR,
     INPUT_DOCS_DIR,
     MANIFEST_FILE_SUFFIX,
     PROCESSED_DOCS_DIR,
     SUMMARY_FILE_SUFFIX,
     TRANSLATION_FILE_SUFFIX,
-    ERROR_FILE_SUFFIX,
 )
-from src.core.config import (
-    SCANNER_ENABLED,
-    SCANNER_INTERVAL_SECONDS,
-    SUPPORTED_DOCUMENT_EXTENSIONS,
-)
-from src.models import PipelineConfig
-from src.services.agent_graph import document_graph
-from src.services.document_service import DocumentService
 
 logger = logging.getLogger("uvicorn.info")
 router = APIRouter()
@@ -180,6 +182,14 @@ async def get_audio_by_date(
         if not audio_path.is_file():
             continue
 
+        audio_duration = manifest.get("audio_duration_seconds")
+        if audio_duration is None:
+            try:
+                audio_obj = MP3(str(audio_path))
+                audio_duration = round(audio_obj.info.length, 2)
+            except Exception as e:
+                audio_duration = 0.0
+
         items.append(
             {
                 "title": manifest.get("title") or title_from_filename(
@@ -189,6 +199,7 @@ async def get_audio_by_date(
                 "symbol": manifest.get("symbol"),
                 "company_name": manifest.get("company_name"),
                 "audio_url": encrypt_url(str(request.url_for("download_audio", filename=audio_file))),
+                "audio_duration_seconds": audio_duration,
                 "body": "Voice Attached",
             }
         )
@@ -285,7 +296,7 @@ def is_file_locked(filepath: Path) -> bool:
         with open(filepath, 'a'):
             pass
         return False
-    except IOError:
+    except OSError:
         return True
 
 async def scan_input_folder(stop_when_paused: bool = False) -> None:
@@ -376,7 +387,7 @@ async def run_pipeline_core(
     filename: str,
     content: str,
     config: PipelineConfig,
-    ocr_usage: dict[str, int] = None,
+    ocr_usage: dict[str, int] | None = None,
     document_type: str = "unknown",
     file_size_bytes: int = 0,
 ) -> dict[str, Any]:
@@ -406,32 +417,42 @@ async def run_pipeline_core(
             }
         )
 
+        processed_dir = Path(PROCESSED_DOCS_DIR)
+        manifest_path = processed_dir / f"{Path(filename).stem}{MANIFEST_FILE_SUFFIX}"
+        old_data: dict[str, Any] = {}
+        if manifest_path.exists():
+            try:
+                manifest_text = await asyncio.to_thread(
+                    manifest_path.read_text, encoding="utf-8"
+                )
+                old_data = json.loads(manifest_text)
+            except (OSError, json.JSONDecodeError):
+                logger.warning("Unable to preserve metrics from %s", manifest_path.name)
+
+        # Reusing an artifact must not erase the billable usage that originally
+        # created it. Preserve exact prior metrics when a graph node was skipped.
+        for metrics_key in ("summary_metrics", "translation_metrics", "audio_metrics"):
+            current_metrics = final_state.get(metrics_key, {})
+            previous_metrics = old_data.get(metrics_key, {})
+            if (
+                isinstance(current_metrics, dict)
+                and current_metrics.get("skipped")
+                and isinstance(previous_metrics, dict)
+            ):
+                final_state[metrics_key] = {**previous_metrics, "reused": True}
+
         summary = final_state["english_summary"].strip()
         translation = final_state["urdu_summary"].strip()
         metrics = final_state.get("summary_metrics", {})
         extracted_data = metrics.get("extracted_data", {}) or {}
         company_name = metrics.get("extracted_name") or extracted_data.get("company_name")
+        company_name = company_name or old_data.get("company_name")
         extracted_title = metrics.get("extracted_title") or extracted_data.get("title")
-        title = extracted_title or company_name or title_from_filename(filename)
-        callname = final_state.get("callname", "")
+        if "symbol" not in extracted_data or not extracted_data["symbol"]:
+            extracted_data["symbol"] = old_data.get("symbol")
+        title = extracted_title or company_name or old_data.get("title") or title_from_filename(filename)
+        callname = final_state.get("callname", "") or old_data.get("calling_name", "")
 
-        # If we skipped generation, preserve these from the existing manifest
-        processed_dir = Path(PROCESSED_DOCS_DIR)
-        manifest_path = processed_dir / f"{Path(filename).stem}{MANIFEST_FILE_SUFFIX}"
-        if manifest_path.exists():
-            try:
-                import json
-                with open(manifest_path, 'r', encoding='utf-8') as f:
-                    old_data = json.load(f)
-                company_name = company_name or old_data.get("company_name")
-                if "symbol" not in extracted_data or not extracted_data["symbol"]:
-                    extracted_data["symbol"] = old_data.get("symbol")
-                title = extracted_title or company_name or old_data.get("title") or title_from_filename(filename)
-                callname = callname or old_data.get("calling_name", "")
-            except Exception:
-                pass
-
-        processed_dir = Path(PROCESSED_DOCS_DIR)
         write_text_atomic(processed_dir / summary_file, summary)
         write_text_atomic(processed_dir / translation_file, translation)
         if (processed_dir / audio_temporary).exists():
@@ -448,35 +469,25 @@ async def run_pipeline_core(
             p = processed_dir / f_name
             return p.stat().st_size if p.exists() else 0
 
-        import json
+        audio_duration_seconds = 0.0
         try:
-            with open("model_pricing.json", "r") as f:
-                pricing = json.load(f)
-        except Exception:
-            pricing = {}
-
-        def compute_cost_cents(metrics: dict, default_model: str = "") -> float:
-            if not metrics: return 0.0
-            model = metrics.get("model", default_model)
-            inp = metrics.get("input_tokens", 0)
-            out = metrics.get("output_tokens", 0)
-            price = pricing.get(model)
-            if price:
-                cost_usd = (inp / 1_000_000) * price["input_cost_per_million"] + (out / 1_000_000) * price["output_cost_per_million"]
-                return round(cost_usd * 100, 4)
-            return 0.0
+            if (processed_dir / audio_file).exists():
+                audio_obj = MP3(str(processed_dir / audio_file))
+                audio_duration_seconds = round(audio_obj.info.length, 2)
+        except Exception as e:
+            logger.warning("Could not read audio duration for %s: %s", audio_file, e)
 
         ocr_m = final_state.get("ocr_metrics", {})
-        ocr_m["cost_cents"] = compute_cost_cents(ocr_m, "gemini-3.7-flash")
+        ocr_m["cost_cents"] = calculate_cost_cents(ocr_m, "gemini-3.7-flash")
         
         sum_m = final_state.get("summary_metrics", {})
-        sum_m["cost_cents"] = compute_cost_cents(sum_m, "gemini-3.7-flash")
+        sum_m["cost_cents"] = calculate_cost_cents(sum_m, "gemini-3.7-flash")
         
         tra_m = final_state.get("translation_metrics", {})
-        tra_m["cost_cents"] = compute_cost_cents(tra_m, "gemini-3.7-flash")
+        tra_m["cost_cents"] = calculate_cost_cents(tra_m, "gemini-3.7-flash")
         
         aud_m = final_state.get("audio_metrics", {})
-        aud_m["cost_cents"] = compute_cost_cents(aud_m, "gemini-2.5-flash-preview-tts")
+        aud_m["cost_cents"] = calculate_cost_cents(aud_m, "gemini-2.5-flash-preview-tts")
 
         total_cost_cents = round(ocr_m["cost_cents"] + sum_m["cost_cents"] + tra_m["cost_cents"] + aud_m["cost_cents"], 4)
         
@@ -503,6 +514,7 @@ async def run_pipeline_core(
             "translation_length_words": len(translation.split()),
             "audio_file": audio_file,
             "audio_size_bytes": get_artifact_size(audio_file),
+            "audio_duration_seconds": audio_duration_seconds,
             "thinking_level": "LOW",
             "total_cost_cents": total_cost_cents,
             "ocr_metrics": ocr_m,
@@ -658,6 +670,7 @@ def get_audit_records():
     """Returns the full list of processed documents with individual token and cost metrics."""
     from src.services.telemetry import fetch_audit_records
     return fetch_audit_records()
+
 
 @router.get("/api/audit/daily", tags=["Telemetry Dashboard"])
 def get_audit_daily():

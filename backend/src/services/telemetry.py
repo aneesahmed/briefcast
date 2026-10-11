@@ -3,7 +3,10 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
-from src.settings import PROCESSED_DOCS_DIR
+
+from src.core.config import MP3_BIT_RATE_KBPS
+from src.services.pricing import calculate_cost_usd, estimate_audio_output_tokens
+from src.settings import AUDIO_MODEL, PROCESSED_DOCS_DIR
 
 logger = logging.getLogger("uvicorn.info")
 
@@ -15,6 +18,19 @@ INIT_SQL_PATH = DB_DIR / "init.sql"
 telemetry_task = None
 telemetry_stop_event = asyncio.Event()
 
+
+def _total_tokens(metrics: object) -> int:
+    if not isinstance(metrics, dict):
+        return 0
+    return sum(
+        int(metrics.get(key) or 0)
+        for key in ("input_tokens", "output_tokens", "thinking_tokens")
+    )
+
+
+def _metrics_cost(metrics: object, default_model: str) -> float:
+    return calculate_cost_usd(metrics if isinstance(metrics, dict) else {}, default_model)
+
 def get_db():
     # Ensure db directory exists
     DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -24,20 +40,21 @@ def get_db():
     return conn
 
 def init_db():
-    # Only run init.sql if the database is completely empty (no tables)
+    """Create the schema and reapply idempotent pricing/view migrations."""
     conn = get_db()
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT count(name) FROM sqlite_master WHERE type='table' AND name='audit_records'")
-        if cur.fetchone()[0] == 1:
-            return  # Database already exists and has tables
-            
         if INIT_SQL_PATH.exists():
             with open(INIT_SQL_PATH, 'r', encoding='utf-8') as f:
                 sql_script = f.read()
             conn.executescript(sql_script)
+            
+            try:
+                conn.execute("ALTER TABLE audit_records ADD COLUMN audio_duration_seconds NUMERIC(10, 2) DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass # Column already exists
+                
             conn.commit()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - startup must log schema failures
         logger.error(f"Failed to initialize database: {e}")
     finally:
         conn.close()
@@ -46,13 +63,6 @@ def _run_scan():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT model_name, input_cost_per_million, output_cost_per_million FROM model_pricing")
-        pricing = {row['model_name']: dict(row) for row in cur.fetchall()}
-        
-        # OPTIMIZATION: Get all filenames currently in the database to avoid reprocessing
-        cur.execute("SELECT filename FROM audit_records")
-        processed_filenames = {row['filename'] for row in cur.fetchall()}
-        
         manifests = list(PROCESSED_DOCS_DIR.glob("*_manifest.json"))
         
         new_records = 0
@@ -62,19 +72,15 @@ def _run_scan():
                     manifest = json.load(f)
                     
                 filename = manifest.get("original_filename")
-                if not filename or filename in processed_filenames:
+                if not filename:
                     continue
-                
-                cur.execute("SELECT completed_at FROM audit_records WHERE filename = ?", (filename,))
-                row = cur.fetchone()
                 manifest_completed_at = manifest.get("completed_at")
-                
-                if row and row['completed_at'] == manifest_completed_at:
+                if not manifest_completed_at:
                     continue
-                
+
                 company_name = manifest.get("company_name", "")
                 symbol = manifest.get("symbol", "")
-                
+
                 def get_size_mb(fname):
                     p = PROCESSED_DOCS_DIR / fname if fname else None
                     if p and p.exists():
@@ -89,36 +95,103 @@ def _run_scan():
                 translation_size_mb = get_size_mb(translation_file)
                 audio_file = manifest.get("audio_file", f"{base_name}_audio.mp3")
                 audio_size_mb = get_size_mb(audio_file)
-                
-                def get_total_tokens(metrics_key):
-                    metrics = manifest.get(metrics_key, {})
-                    if not isinstance(metrics, dict):
-                        return 0
-                    return metrics.get("input_tokens", 0) + metrics.get("output_tokens", 0)
 
-                ocr_tokens = get_total_tokens("ocr_metrics")
-                summary_tokens = get_total_tokens("summary_metrics")
-                translation_tokens = get_total_tokens("translation_metrics")
-                
                 audio_metrics = manifest.get("audio_metrics", {})
-                audio_tokens = audio_metrics.get("input_tokens", 0) if isinstance(audio_metrics, dict) else 0
+                audio_metrics = dict(audio_metrics) if isinstance(audio_metrics, dict) else {}
+                audio_model = str(audio_metrics.get("model") or AUDIO_MODEL)
+                audio_metrics["model"] = audio_model
+
+                duration_seconds = manifest.get("audio_duration_seconds")
+                if duration_seconds is None:
+                    try:
+                        audio_path = PROCESSED_DOCS_DIR / audio_file
+                        if audio_path.exists():
+                            from mutagen.mp3 import MP3
+                            audio_obj = MP3(str(audio_path))
+                            duration_seconds = round(audio_obj.info.length, 2)
+                    except Exception:
+                        pass
                 
-                model_name = "gemini-3.7-flash"
+                # If mutagen fails or file missing, fallback to bitrate math
+                if not duration_seconds and audio_size_mb > 0:
+                    duration_seconds = (
+                        audio_size_mb * 1024 * 1024 * 8 / (MP3_BIT_RATE_KBPS * 1000)
+                    )
+
+                if not audio_metrics.get("output_tokens") and duration_seconds:
+                    audio_metrics["output_tokens"] = estimate_audio_output_tokens(
+                        duration_seconds, audio_model
+                    )
+                    audio_metrics["output_tokens_estimated"] = True
+
+                if not audio_metrics.get("input_tokens") and translation_file:
+                    translation_path = PROCESSED_DOCS_DIR / translation_file
+                    if translation_path.exists():
+                        audio_metrics["input_tokens"] = len(
+                            translation_path.read_text(encoding="utf-8")
+                        )
+                        audio_metrics["input_tokens_estimated"] = True
                 
-                def get_cost(tokens, m_name):
-                    if not tokens:
-                        return 0.0
-                    if m_name in pricing:
-                        in_price = pricing[m_name]['input_cost_per_million']
-                        out_price = pricing[m_name]['output_cost_per_million']
-                        avg_price = (in_price + out_price) / 2
-                        return (tokens / 1000000.0) * float(avg_price)
-                    return (tokens / 1000000.0) * 0.1875
-                    
-                ocr_cost_usd = get_cost(ocr_tokens, model_name)
-                summary_cost_usd = get_cost(summary_tokens, model_name)
-                translation_cost_usd = get_cost(translation_tokens, model_name)
-                audio_cost_usd = get_cost(audio_tokens, "gemini-2.5-flash-preview-tts")
+                ocr_metrics = manifest.get("ocr_metrics", {})
+                summary_metrics = manifest.get("summary_metrics", {})
+                translation_metrics = manifest.get("translation_metrics", {})
+
+                ocr_tokens = _total_tokens(ocr_metrics)
+                summary_tokens = _total_tokens(summary_metrics)
+                translation_tokens = _total_tokens(translation_metrics)
+
+                audio_tokens = _total_tokens(audio_metrics)
+                summary_model = (
+                    summary_metrics.get("model")
+                    if isinstance(summary_metrics, dict)
+                    else None
+                )
+                model_name = str(summary_model or "gemini-3.7-flash")
+
+                ocr_cost_usd = _metrics_cost(ocr_metrics, "gemini-3.7-flash")
+                summary_cost_usd = _metrics_cost(summary_metrics, "gemini-3.7-flash")
+                translation_cost_usd = _metrics_cost(
+                    translation_metrics, "gemini-3.7-flash"
+                )
+                audio_cost_usd = _metrics_cost(audio_metrics, AUDIO_MODEL)
+
+                record_values = (
+                    filename, symbol, company_name, manifest_completed_at, model_name,
+                    ocr_size_mb, ocr_tokens, ocr_cost_usd,
+                    summary_size_mb, summary_tokens, summary_cost_usd,
+                    translation_size_mb, translation_tokens, translation_cost_usd,
+                    audio_size_mb, audio_tokens, audio_cost_usd,
+                    duration_seconds or 0.0,
+                )
+                existing = cur.execute("""
+                    SELECT filename, symbol, company_name, completed_at, model_name,
+                           ocr_size_mb, ocr_tokens, ocr_cost_usd,
+                           summary_size_mb, summary_tokens, summary_cost_usd,
+                           translation_size_mb, translation_tokens, translation_cost_usd,
+                           audio_size_mb, audio_tokens, audio_cost_usd, audio_duration_seconds
+                    FROM audit_records WHERE filename = ?
+                """, (filename,)).fetchone()
+                
+                # Check if we need to update
+                needs_update = True
+                if existing is not None:
+                    # Handle sqlite returning REAL as float or int interchangeably by comparing rounded values
+                    ex_list = list(existing)
+                    if len(ex_list) == len(record_values):
+                        needs_update = False
+                        for i in range(len(ex_list)):
+                            val1 = ex_list[i] if ex_list[i] is not None else 0
+                            val2 = record_values[i] if record_values[i] is not None else 0
+                            if isinstance(val1, (int, float)) and isinstance(val2, (int, float)):
+                                if abs(float(val1) - float(val2)) > 0.0001:
+                                    needs_update = True
+                                    break
+                            elif val1 != val2:
+                                needs_update = True
+                                break
+
+                if not needs_update:
+                    continue
                     
                 cur.execute("""
                     INSERT INTO audit_records (
@@ -126,8 +199,8 @@ def _run_scan():
                         ocr_size_mb, ocr_tokens, ocr_cost_usd,
                         summary_size_mb, summary_tokens, summary_cost_usd,
                         translation_size_mb, translation_tokens, translation_cost_usd,
-                        audio_size_mb, audio_tokens, audio_cost_usd
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        audio_size_mb, audio_tokens, audio_cost_usd, audio_duration_seconds
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(filename) DO UPDATE SET
                         completed_at=excluded.completed_at,
                         company_name=excluded.company_name,
@@ -135,22 +208,19 @@ def _run_scan():
                         ocr_size_mb=excluded.ocr_size_mb, ocr_tokens=excluded.ocr_tokens, ocr_cost_usd=excluded.ocr_cost_usd,
                         summary_size_mb=excluded.summary_size_mb, summary_tokens=excluded.summary_tokens, summary_cost_usd=excluded.summary_cost_usd,
                         translation_size_mb=excluded.translation_size_mb, translation_tokens=excluded.translation_tokens, translation_cost_usd=excluded.translation_cost_usd,
-                        audio_size_mb=excluded.audio_size_mb, audio_tokens=excluded.audio_tokens, audio_cost_usd=excluded.audio_cost_usd
-                """, (
-                    filename, symbol, company_name, manifest_completed_at, model_name,
-                    ocr_size_mb, ocr_tokens, ocr_cost_usd,
-                    summary_size_mb, summary_tokens, summary_cost_usd,
-                    translation_size_mb, translation_tokens, translation_cost_usd,
-                    audio_size_mb, audio_tokens, audio_cost_usd
-                ))
+                        audio_size_mb=excluded.audio_size_mb, audio_tokens=excluded.audio_tokens, audio_cost_usd=excluded.audio_cost_usd,
+                        audio_duration_seconds=excluded.audio_duration_seconds,
+                        model_name=excluded.model_name,
+                        scanned_at=CURRENT_TIMESTAMP
+                """, record_values)
                 new_records += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - isolate malformed manifests
                 logger.error(f"Error processing manifest {manifest_path.name}: {e}")
         
         conn.commit()
         if new_records > 0:
             logger.info(f"Telemetry Scan complete. Updated {new_records} records in audit.db.")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - keep the background scanner alive
         logger.error(f"Telemetry scan failed: {e}")
     finally:
         conn.close()
@@ -161,7 +231,7 @@ async def telemetry_loop():
         await asyncio.to_thread(_run_scan)
         try:
             await asyncio.wait_for(telemetry_stop_event.wait(), timeout=10)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
 def start_telemetry_scanner():
