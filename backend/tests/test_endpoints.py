@@ -25,8 +25,10 @@ def configure_test_directories(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "PROCESSING_DOCS_DIR", processing_dir)
     monkeypatch.setattr(routes, "PROCESSED_DOCS_DIR", processed_dir)
     monkeypatch.setattr(routes, "FAILED_FILES_DIR", failed_dir)
+    monkeypatch.setattr(routes, "scanner_runtime_enabled", True)
+    monkeypatch.setattr(routes, "scanner_system_error", None)
+    routes.scanner_stop_event.clear()
     routes.active_jobs.clear()
-    routes.retry_files.clear()
     return source_dir, processed_dir, failed_dir
 
 
@@ -207,10 +209,12 @@ def test_scanner_status_reports_processing_count(monkeypatch):
     assert status["configuration_ready"] is True
 
 
-def test_system_error_returns_file_to_source_for_retry(tmp_path, monkeypatch):
+def test_system_error_returns_file_and_stops_scanner(tmp_path, monkeypatch):
     source_dir, _, failed_dir = configure_test_directories(tmp_path, monkeypatch)
     source_file = source_dir / "network_test.txt"
     source_file.write_text("Financial report contents.", encoding="utf-8")
+    untouched_file = source_dir / "untouched.txt"
+    untouched_file.write_text("This file must not be scanned yet.", encoding="utf-8")
 
     async def fail_pipeline(*args, **kwargs):
         raise ConnectionError("Gemini network is unavailable")
@@ -219,9 +223,11 @@ def test_system_error_returns_file_to_source_for_retry(tmp_path, monkeypatch):
     asyncio.run(routes.scan_input_folder())
 
     assert source_file.exists()
+    assert untouched_file.exists()
     assert not (failed_dir / source_file.name).exists()
-    assert routes.retry_files[source_file.name]["status"] == "waiting_for_retry"
-    assert routes.retry_files[source_file.name]["attempts"] == 1
+    assert routes.scanner_runtime_enabled is False
+    assert routes.scanner_system_error["filename"] == source_file.name
+    assert "network is unavailable" in routes.scanner_system_error["error"]
 
 
 def test_empty_document_moves_to_failed_folder(tmp_path, monkeypatch):
@@ -234,4 +240,5 @@ def test_empty_document_moves_to_failed_folder(tmp_path, monkeypatch):
     assert not source_file.exists()
     assert (failed_dir / source_file.name).exists()
     assert (failed_dir / "empty_error.json").exists()
-    assert source_file.name not in routes.retry_files
+    assert routes.scanner_runtime_enabled is True
+    assert routes.scanner_system_error is None

@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import shutil
 import time
 import uuid
@@ -15,8 +14,6 @@ from fastapi.responses import FileResponse
 from mutagen.mp3 import MP3
 
 from src.core.config import (
-    RETRY_INITIAL_DELAY_SECONDS,
-    RETRY_MAX_DELAY_SECONDS,
     SCANNER_ENABLED,
     SCANNER_INTERVAL_SECONDS,
     SUPPORTED_DOCUMENT_EXTENSIONS,
@@ -46,7 +43,7 @@ scanner_runtime_enabled = SCANNER_ENABLED
 scanner_task: asyncio.Task | None = None
 scanner_active_file: str | None = None
 scanner_stop_event = asyncio.Event()
-retry_files: dict[str, dict[str, Any]] = {}
+scanner_system_error: dict[str, Any] | None = None
 local_timezone = datetime.now().astimezone().tzinfo
 
 
@@ -148,10 +145,23 @@ async def stop_scanner_endpoint():
 @router.post("/api/scanner/scan", tags=["Scanner"])
 async def scan_now():
     """Run one immediate scan without changing the recurring scanner state."""
+    if scanner_system_error is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Scanner stopped after a system error. Fix the error and call /api/scanner/start before scanning again.",
+        )
     configuration_error = scanner_configuration_error()
     if configuration_error:
         raise HTTPException(status_code=400, detail=configuration_error)
-    await scan_input_folder()
+    try:
+        await scan_input_folder()
+    except Exception as exc:
+        record_scanner_system_error(exc)
+        logger.exception("Manual folder scan stopped after a system error")
+        raise HTTPException(
+            status_code=503,
+            detail="Scanner stopped after a system error. Check /api/scanner/status.",
+        ) from exc
     return scanner_status()
 
 
@@ -281,8 +291,8 @@ def scanner_status() -> dict[str, Any]:
         "interval_seconds": SCANNER_INTERVAL_SECONDS,
         "active_files": [scanner_active_file] if scanner_active_file else [],
         "processing_count": len(active_jobs),
-        "retry_count": len(retry_files),
-        "retry_files": list(retry_files.values()),
+        "stopped_due_to_system_error": scanner_system_error is not None,
+        "system_error": scanner_system_error,
         "configuration_ready": configuration_error is None,
         "configuration_error": configuration_error,
         "source_directory": str(INPUT_DOCS_DIR),
@@ -332,10 +342,6 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
             logger.warning(f"File {source_file.name} is currently locked by another process (likely downloading). Leaving for next scan.")
             continue
 
-        retry_record = retry_files.get(source_file.name)
-        if retry_record and time.time() < retry_record["retry_at_timestamp"]:
-            continue
-
         # Collision renaming removed as per user request.
         # We will reuse existing artifacts or regenerate missing ones in-place.
 
@@ -360,10 +366,12 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
         
         timestamp = datetime.now(local_timezone).strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"Processed file: {source_file.name} at {timestamp} - Time taken: {elapsed:.2f} seconds")
+        if not scanner_runtime_enabled:
+            break
 
 
 async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
-    global scanner_active_file
+    global scanner_active_file, scanner_runtime_enabled, scanner_system_error
 
     scanner_active_file = source_file.name
     try:
@@ -390,7 +398,6 @@ async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
             f".{source_file.stem}_{transaction_id}.audio.part"
         )
         await asyncio.to_thread(fail_source_file, source_file.name, transaction_id, str(exc))
-        retry_files.pop(source_file.name, None)
         active_jobs.pop(transaction_id, None)
     except Exception as exc:
         logger.exception(
@@ -400,7 +407,25 @@ async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
         remove_temporary_audio(
             f".{source_file.stem}_{transaction_id}.audio.part"
         )
-        await asyncio.to_thread(retry_source_file, source_file.name, transaction_id, exc)
+        record_scanner_system_error(exc, source_file.name, transaction_id)
+        returned_filename = source_file.name
+        try:
+            returned_filename = await asyncio.to_thread(
+                return_source_file, source_file.name
+            )
+            if scanner_system_error is not None:
+                scanner_system_error["filename"] = returned_filename
+        except Exception as return_exc:
+            if scanner_system_error is not None:
+                scanner_system_error["return_error"] = str(return_exc)
+            logger.exception(
+                "Scanner stopped, but %s could not be returned to the source folder",
+                source_file.name,
+            )
+        logger.error(
+            "Folder scanner stopped after a system error while processing %s",
+            returned_filename,
+        )
         active_jobs.pop(transaction_id, None)
     finally:
         scanner_active_file = None
@@ -546,7 +571,6 @@ async def run_pipeline_core(
             "audio_metrics": aud_m,
         }
         await asyncio.to_thread(finalize_source_file, filename, record)
-        retry_files.pop(filename, None)
         active_jobs.pop(transaction_id, None)
         logger.info("Successfully processed %s", filename)
         return record
@@ -600,69 +624,35 @@ def fail_source_file(filename: str, transaction_id: str, error: str) -> None:
         source_file.replace(destination)
 
 
-def provider_retry_delay(error: Exception) -> float:
-    """Read a provider-supplied retry delay when one is present."""
-    message = str(error)
-    match = re.search(
-        r"retry(?:\s+in|\s+after|Delay[^0-9]*)\s*"
-        r"(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?",
-        message,
-        flags=re.IGNORECASE,
-    )
-    if not match or not any(match.groups()):
-        return 0.0
-    hours = int(match.group(1) or 0)
-    minutes = int(match.group(2) or 0)
-    seconds = float(match.group(3) or 0.0)
-    return hours * 3600 + minutes * 60 + seconds
-
-
-def retry_source_file(
-    filename: str,
-    transaction_id: str,
-    error: Exception,
-) -> None:
-    """Return a file to the source folder after a temporary/system failure."""
+def return_source_file(filename: str) -> str:
+    """Return a file to the source folder after a system failure."""
     source_file = Path(PROCESSING_DOCS_DIR) / filename
-    previous = retry_files.pop(filename, None) or {}
-    attempts = int(previous.get("attempts", 0)) + 1
-    exponential_delay = min(
-        RETRY_INITIAL_DELAY_SECONDS * (2 ** (attempts - 1)),
-        RETRY_MAX_DELAY_SECONDS,
-    )
-    delay_seconds = min(
-        max(exponential_delay, provider_retry_delay(error)),
-        RETRY_MAX_DELAY_SECONDS,
-    )
-
     destination = Path(INPUT_DOCS_DIR) / filename
     if destination.exists():
         timestamp = datetime.now(local_timezone).strftime("%Y%m%d_%H%M%S_%f")
         destination = destination.with_name(
-            f"{destination.stem}_retry_{timestamp}{destination.suffix}"
+            f"{destination.stem}_returned_{timestamp}{destination.suffix}"
         )
     if source_file.exists():
         source_file.replace(destination)
+    return destination.name
 
-    retry_at_timestamp = time.time() + delay_seconds
-    retry_files[destination.name] = {
-        "filename": destination.name,
-        "status": "waiting_for_retry",
-        "attempts": attempts,
-        "retry_after_seconds": round(delay_seconds, 2),
-        "retry_at": datetime.fromtimestamp(
-            retry_at_timestamp, local_timezone
-        ).isoformat(),
-        "retry_at_timestamp": retry_at_timestamp,
-        "last_error": str(error),
-        "last_transaction_id": transaction_id,
+
+def record_scanner_system_error(
+    error: Exception | str,
+    filename: str | None = None,
+    transaction_id: str | None = None,
+) -> None:
+    """Record a system failure and stop all automatic folder scanning."""
+    global scanner_runtime_enabled, scanner_system_error
+    scanner_system_error = {
+        "filename": filename,
+        "error": str(error),
+        "stopped_at": datetime.now(local_timezone).isoformat(),
+        "transaction_id": transaction_id,
     }
-    logger.warning(
-        "Returned %s to the source folder; retry %s in %.2f seconds",
-        destination.name,
-        attempts,
-        delay_seconds,
-    )
+    scanner_runtime_enabled = False
+    scanner_stop_event.set()
 
 
 def parse_record_datetime(record: dict[str, Any]) -> datetime | None:
@@ -700,8 +690,9 @@ async def scanner_loop() -> None:
             await scan_input_folder(stop_when_paused=True)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception("Folder scanner iteration failed")
+            record_scanner_system_error(exc)
 
         if not scanner_runtime_enabled:
             break
@@ -714,11 +705,13 @@ async def scanner_loop() -> None:
 
 
 async def start_folder_scanner() -> None:
-    global scanner_runtime_enabled, scanner_task
+    global scanner_runtime_enabled, scanner_system_error, scanner_task
 
     configuration_error = scanner_configuration_error()
     if configuration_error:
+        record_scanner_system_error(configuration_error)
         raise RuntimeError(configuration_error)
+    scanner_system_error = None
     scanner_runtime_enabled = True
     scanner_stop_event.clear()
     if scanner_task is None or scanner_task.done():
