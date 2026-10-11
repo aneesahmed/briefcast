@@ -30,15 +30,16 @@ logger.addHandler(file_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize persistent telemetry before any document can be processed.
+    # A schema failure aborts startup instead of producing one error per manifest.
+    start_telemetry_scanner()
+
     if scanner_runtime_enabled:
         try:
             await start_folder_scanner()
         except RuntimeError as exc:
             logger.warning("Automatic scanner is paused: %s", exc)
-    
-    # Start the 10-second telemetry background scanner
-    start_telemetry_scanner()
-    
+
     yield
     
     await shutdown_folder_scanner()

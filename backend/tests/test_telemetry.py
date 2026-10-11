@@ -15,11 +15,6 @@ def configure_telemetry(tmp_path, monkeypatch):
     monkeypatch.setattr(telemetry, "PROCESSED_DOCS_DIR", processed_dir)
     monkeypatch.setattr(telemetry, "DB_DIR", database_dir)
     monkeypatch.setattr(telemetry, "DB_PATH", database_dir / "audit.db")
-    monkeypatch.setattr(
-        telemetry,
-        "INIT_SQL_PATH",
-        Path(__file__).resolve().parents[2] / "db-init" / "init.sql",
-    )
     return processed_dir
 
 

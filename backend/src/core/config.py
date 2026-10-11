@@ -60,5 +60,10 @@ GEMINI_VOICE_BY_GENDER = {"Female": "Aoede", "Male": "Puck"}
 # (Model tuples removed, moved to settings)
 
 
-for directory in (BRIEFING_SOURCE_DIR, PROCESSED_FILES_DIR, FAILED_FILES_DIR):
+for directory in (
+    BRIEFING_SOURCE_DIR,
+    PROCESSING_FILES_DIR,
+    PROCESSED_FILES_DIR,
+    FAILED_FILES_DIR,
+):
     directory.mkdir(parents=True, exist_ok=True)

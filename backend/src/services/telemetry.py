@@ -5,7 +5,11 @@ import sqlite3
 from pathlib import Path
 
 from src.core.config import MP3_BIT_RATE_KBPS
-from src.services.pricing import calculate_cost_usd, estimate_audio_output_tokens
+from src.services.pricing import (
+    MODEL_PRICING_USD_PER_MILLION,
+    calculate_cost_usd,
+    estimate_audio_output_tokens,
+)
 from src.settings import AUDIO_MODEL, PROCESSED_DOCS_DIR
 
 logger = logging.getLogger("uvicorn.info")
@@ -13,7 +17,6 @@ logger = logging.getLogger("uvicorn.info")
 PROJECT_ROOT = PROCESSED_DOCS_DIR.parent
 DB_DIR = PROJECT_ROOT / "db-init"
 DB_PATH = DB_DIR / "audit.db"
-INIT_SQL_PATH = DB_DIR / "init.sql"
 
 telemetry_task = None
 telemetry_stop_event = asyncio.Event()
@@ -39,23 +42,123 @@ def get_db():
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
-def init_db():
-    """Create the schema and reapply idempotent pricing/view migrations."""
+def ensure_database_schema(conn: sqlite3.Connection) -> None:
+    """Create or migrate the audit schema without external SQL files."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS model_pricing (
+            model_name TEXT PRIMARY KEY,
+            input_cost_per_million REAL NOT NULL,
+            output_cost_per_million REAL NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    for model_name, rates in MODEL_PRICING_USD_PER_MILLION.items():
+        conn.execute(
+            """
+            INSERT INTO model_pricing (
+                model_name, input_cost_per_million, output_cost_per_million
+            ) VALUES (?, ?, ?)
+            ON CONFLICT(model_name) DO UPDATE SET
+                input_cost_per_million=excluded.input_cost_per_million,
+                output_cost_per_million=excluded.output_cost_per_million,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (model_name, rates["input"], rates["output"]),
+        )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS audit_records (
+            filename TEXT PRIMARY KEY,
+            symbol TEXT,
+            company_name TEXT,
+            completed_at TIMESTAMP NOT NULL,
+            ocr_size_mb REAL DEFAULT 0,
+            ocr_tokens INTEGER DEFAULT 0,
+            ocr_cost_usd REAL DEFAULT 0,
+            summary_size_mb REAL DEFAULT 0,
+            summary_tokens INTEGER DEFAULT 0,
+            summary_cost_usd REAL DEFAULT 0,
+            translation_size_mb REAL DEFAULT 0,
+            translation_tokens INTEGER DEFAULT 0,
+            translation_cost_usd REAL DEFAULT 0,
+            audio_size_mb REAL DEFAULT 0,
+            audio_tokens INTEGER DEFAULT 0,
+            audio_cost_usd REAL DEFAULT 0,
+            audio_duration_seconds REAL DEFAULT 0,
+            net_size_mb REAL GENERATED ALWAYS AS (
+                ocr_size_mb + summary_size_mb + translation_size_mb + audio_size_mb
+            ) STORED,
+            net_tokens INTEGER GENERATED ALWAYS AS (
+                ocr_tokens + summary_tokens + translation_tokens + audio_tokens
+            ) STORED,
+            net_cost_usd REAL GENERATED ALWAYS AS (
+                ocr_cost_usd + summary_cost_usd + translation_cost_usd + audio_cost_usd
+            ) STORED,
+            model_name TEXT,
+            scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_xinfo(audit_records)").fetchall()
+    }
+    if "audio_duration_seconds" not in columns:
+        conn.execute(
+            "ALTER TABLE audit_records ADD COLUMN "
+            "audio_duration_seconds REAL DEFAULT 0"
+        )
+
+    conn.execute("DROP VIEW IF EXISTS audit_daily_summary")
+    conn.execute(
+        """
+        CREATE VIEW audit_daily_summary AS
+        SELECT
+            SUBSTR(completed_at, 1, 10) AS audit_date,
+            COUNT(filename) AS total_files,
+            SUM(ocr_size_mb) AS total_ocr_size_mb,
+            SUM(ocr_tokens) AS total_ocr_tokens,
+            SUM(ocr_cost_usd) AS total_ocr_cost_usd,
+            SUM(summary_size_mb) AS total_summary_size_mb,
+            SUM(summary_tokens) AS total_summary_tokens,
+            SUM(summary_cost_usd) AS total_summary_cost_usd,
+            SUM(translation_size_mb) AS total_translation_size_mb,
+            SUM(translation_tokens) AS total_translation_tokens,
+            SUM(translation_cost_usd) AS total_translation_cost_usd,
+            SUM(audio_size_mb) AS total_audio_size_mb,
+            SUM(audio_tokens) AS total_audio_tokens,
+            SUM(audio_cost_usd) AS total_audio_cost_usd,
+            SUM(net_size_mb) AS total_net_size_mb,
+            SUM(net_tokens) AS total_net_tokens,
+            SUM(net_cost_usd) AS total_net_cost_usd
+        FROM audit_records
+        GROUP BY SUBSTR(completed_at, 1, 10)
+        ORDER BY audit_date DESC
+        """
+    )
+
+    schema_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='audit_records'"
+    ).fetchone()
+    if schema_exists is None:
+        raise RuntimeError("audit_records table was not created")
+
+
+def init_db() -> None:
+    """Create the database and fail startup if its schema cannot be initialized."""
     conn = get_db()
     try:
-        if INIT_SQL_PATH.exists():
-            with open(INIT_SQL_PATH, 'r', encoding='utf-8') as f:
-                sql_script = f.read()
-            conn.executescript(sql_script)
-            
-            try:
-                conn.execute("ALTER TABLE audit_records ADD COLUMN audio_duration_seconds NUMERIC(10, 2) DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass # Column already exists
-                
-            conn.commit()
-    except Exception as e:  # noqa: BLE001 - startup must log schema failures
-        logger.error(f"Failed to initialize database: {e}")
+        ensure_database_schema(conn)
+        conn.commit()
+        logger.info("Audit database ready: %s", DB_PATH)
+    except Exception:
+        conn.rollback()
+        logger.exception("Failed to initialize the audit database")
+        raise
     finally:
         conn.close()
 

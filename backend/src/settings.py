@@ -1,11 +1,13 @@
 from pathlib import Path
 
 # Project directories
-BRIEFING_SOURCE_DIR = Path(r"C:\working\AI26\briefcast\briefing_source")
-PROCESSING_FILES_DIR = Path(r"C:\working\AI26\briefcast\processing_files")
-PROCESSED_FILES_DIR = Path(r"C:\working\AI26\briefcast\processed_files")
-FAILED_FILES_DIR = Path(r"C:\working\AI26\briefcast\failed_files")
-LOG_FILE_PATH = Path(r"C:\working\AI26\briefcast\briefcast.log")
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+PROJECT_DIR = BACKEND_DIR.parent
+BRIEFING_SOURCE_DIR = PROJECT_DIR / "briefing_source"
+PROCESSING_FILES_DIR = PROJECT_DIR / "processing_files"
+PROCESSED_FILES_DIR = PROJECT_DIR / "processed_files"
+FAILED_FILES_DIR = PROJECT_DIR / "failed_files"
+LOG_FILE_PATH = PROJECT_DIR / "briefcast.log"
 
 INPUT_DOCS_DIR = BRIEFING_SOURCE_DIR
 PROCESSING_DOCS_DIR = PROCESSING_FILES_DIR

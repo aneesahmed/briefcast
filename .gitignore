@@ -66,6 +66,9 @@ Temp / Audio / Scratch files
 .raw
 backend/assets/.wav
 briefcast_db.json
+db-init/*.db
+db-init/*.db-wal
+db-init/*.db-shm
 !.env.example
 !tsconfig.*.json
 scratch/
