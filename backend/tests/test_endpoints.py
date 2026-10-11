@@ -14,15 +14,19 @@ client = TestClient(app)
 
 def configure_test_directories(tmp_path, monkeypatch):
     source_dir = tmp_path / "briefing_source"
+    processing_dir = tmp_path / "processing_files"
     processed_dir = tmp_path / "processed_files"
     failed_dir = tmp_path / "failed_files"
     source_dir.mkdir()
+    processing_dir.mkdir()
     processed_dir.mkdir()
     failed_dir.mkdir()
     monkeypatch.setattr(routes, "INPUT_DOCS_DIR", source_dir)
+    monkeypatch.setattr(routes, "PROCESSING_DOCS_DIR", processing_dir)
     monkeypatch.setattr(routes, "PROCESSED_DOCS_DIR", processed_dir)
     monkeypatch.setattr(routes, "FAILED_FILES_DIR", failed_dir)
     routes.active_jobs.clear()
+    routes.retry_files.clear()
     return source_dir, processed_dir, failed_dir
 
 
@@ -80,7 +84,7 @@ def test_scanner_processes_file_directly(tmp_path, monkeypatch):
     source_file.write_text("Financial report contents.")
     processed = []
 
-    async def fake_pipeline(transaction_id, filename, content, config):
+    async def fake_pipeline(transaction_id, filename, content, config, **kwargs):
         processed.append((filename, content, config.summary_max_words))
         routes.active_jobs.pop(transaction_id, None)
         return {"status": "completed"}
@@ -92,13 +96,13 @@ def test_scanner_processes_file_directly(tmp_path, monkeypatch):
     assert routes.active_jobs == {}
 
 
-def test_duplicate_source_is_renamed_instead_of_deleted(tmp_path, monkeypatch):
+def test_existing_artifacts_do_not_block_source_processing(tmp_path, monkeypatch):
     source_dir, processed_dir, _ = configure_test_directories(tmp_path, monkeypatch)
     (processed_dir / "report_audio.mp3").write_bytes(b"old")
     (source_dir / "report.txt").write_text("New report")
     processed_names = []
 
-    async def fake_pipeline(transaction_id, filename, content, config):
+    async def fake_pipeline(transaction_id, filename, content, config, **kwargs):
         processed_names.append(filename)
         routes.active_jobs.pop(transaction_id, None)
         return {"status": "completed"}
@@ -106,15 +110,13 @@ def test_duplicate_source_is_renamed_instead_of_deleted(tmp_path, monkeypatch):
     monkeypatch.setattr(routes, "run_pipeline_core", fake_pipeline)
     asyncio.run(routes.scan_input_folder())
 
-    assert len(processed_names) == 1
-    assert processed_names[0].startswith("report_")
-    assert processed_names[0].endswith(".txt")
-    assert (source_dir / processed_names[0]).read_text() == "New report"
+    assert processed_names == ["report.txt"]
+    assert (processed_dir / "report_audio.mp3").read_bytes() == b"old"
 
 
 def test_successful_pipeline_creates_flat_artifacts(tmp_path, monkeypatch):
-    source_dir, processed_dir, _ = configure_test_directories(tmp_path, monkeypatch)
-    source_file = source_dir / "market_report.txt"
+    _, processed_dir, _ = configure_test_directories(tmp_path, monkeypatch)
+    source_file = routes.PROCESSING_DOCS_DIR / "market_report.txt"
     source_file.write_text("Market report contents.", encoding="utf-8")
 
     async def fake_invoke(state):
@@ -151,6 +153,7 @@ def test_successful_pipeline_creates_flat_artifacts(tmp_path, monkeypatch):
 
 def test_audio_feed_filters_by_date(tmp_path, monkeypatch):
     _, processed_dir, _ = configure_test_directories(tmp_path, monkeypatch)
+    monkeypatch.setattr(routes, "encrypt_url", lambda url: url)
     (processed_dir / "example_audio.mp3").write_bytes(b"ID3")
     (processed_dir / "example_manifest.json").write_text(
         json.dumps(
@@ -176,6 +179,8 @@ def test_audio_feed_filters_by_date(tmp_path, monkeypatch):
                 "symbol": None,
                 "company_name": None,
                 "audio_url": "http://testserver/api/audio/example_audio.mp3",
+                "audio_duration_seconds": 0.0,
+                "body": "Voice Attached",
             }
         ],
     }
@@ -200,3 +205,33 @@ def test_scanner_status_reports_processing_count(monkeypatch):
 
     assert status["processing_count"] == 1
     assert status["configuration_ready"] is True
+
+
+def test_system_error_returns_file_to_source_for_retry(tmp_path, monkeypatch):
+    source_dir, _, failed_dir = configure_test_directories(tmp_path, monkeypatch)
+    source_file = source_dir / "network_test.txt"
+    source_file.write_text("Financial report contents.", encoding="utf-8")
+
+    async def fail_pipeline(*args, **kwargs):
+        raise ConnectionError("Gemini network is unavailable")
+
+    monkeypatch.setattr(routes, "run_pipeline_core", fail_pipeline)
+    asyncio.run(routes.scan_input_folder())
+
+    assert source_file.exists()
+    assert not (failed_dir / source_file.name).exists()
+    assert routes.retry_files[source_file.name]["status"] == "waiting_for_retry"
+    assert routes.retry_files[source_file.name]["attempts"] == 1
+
+
+def test_empty_document_moves_to_failed_folder(tmp_path, monkeypatch):
+    source_dir, _, failed_dir = configure_test_directories(tmp_path, monkeypatch)
+    source_file = source_dir / "empty.txt"
+    source_file.write_text("", encoding="utf-8")
+
+    asyncio.run(routes.scan_input_folder())
+
+    assert not source_file.exists()
+    assert (failed_dir / source_file.name).exists()
+    assert (failed_dir / "empty_error.json").exists()
+    assert source_file.name not in routes.retry_files

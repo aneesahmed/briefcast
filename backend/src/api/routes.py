@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
@@ -14,6 +15,8 @@ from fastapi.responses import FileResponse
 from mutagen.mp3 import MP3
 
 from src.core.config import (
+    RETRY_INITIAL_DELAY_SECONDS,
+    RETRY_MAX_DELAY_SECONDS,
     SCANNER_ENABLED,
     SCANNER_INTERVAL_SECONDS,
     SUPPORTED_DOCUMENT_EXTENSIONS,
@@ -21,7 +24,7 @@ from src.core.config import (
 from src.core.security import encrypt_url, generate_new_key, set_new_key
 from src.models import PipelineConfig
 from src.services.agent_graph import document_graph
-from src.services.document_service import DocumentService
+from src.services.document_service import DocumentFileError, DocumentService
 from src.services.pricing import calculate_cost_cents
 from src.settings import (
     AUDIO_FILE_SUFFIX,
@@ -29,6 +32,7 @@ from src.settings import (
     FAILED_FILES_DIR,
     INPUT_DOCS_DIR,
     MANIFEST_FILE_SUFFIX,
+    PROCESSING_DOCS_DIR,
     PROCESSED_DOCS_DIR,
     SUMMARY_FILE_SUFFIX,
     TRANSLATION_FILE_SUFFIX,
@@ -42,6 +46,7 @@ scanner_runtime_enabled = SCANNER_ENABLED
 scanner_task: asyncio.Task | None = None
 scanner_active_file: str | None = None
 scanner_stop_event = asyncio.Event()
+retry_files: dict[str, dict[str, Any]] = {}
 local_timezone = datetime.now().astimezone().tzinfo
 
 
@@ -276,6 +281,8 @@ def scanner_status() -> dict[str, Any]:
         "interval_seconds": SCANNER_INTERVAL_SECONDS,
         "active_files": [scanner_active_file] if scanner_active_file else [],
         "processing_count": len(active_jobs),
+        "retry_count": len(retry_files),
+        "retry_files": list(retry_files.values()),
         "configuration_ready": configuration_error is None,
         "configuration_error": configuration_error,
         "source_directory": str(INPUT_DOCS_DIR),
@@ -325,13 +332,16 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
             logger.warning(f"File {source_file.name} is currently locked by another process (likely downloading). Leaving for next scan.")
             continue
 
+        retry_record = retry_files.get(source_file.name)
+        if retry_record and time.time() < retry_record["retry_at_timestamp"]:
+            continue
+
         # Collision renaming removed as per user request.
         # We will reuse existing artifacts or regenerate missing ones in-place.
 
         transaction_id = str(uuid.uuid4())
         
         # Move to processing folder for intermediate processing
-        from src.settings import PROCESSING_DOCS_DIR
         processing_file = Path(PROCESSING_DOCS_DIR) / source_file.name
         
         # Now safe to move since we checked for locks
@@ -359,7 +369,7 @@ async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
     try:
         content, ocr_usage, document_type = await asyncio.to_thread(DocumentService.read_file, source_file)
         if not content.strip():
-            raise ValueError(f"No readable text was found in {source_file.name}.")
+            raise DocumentFileError(f"No readable text was found in {source_file.name}.")
             
         config = PipelineConfig()
         
@@ -374,9 +384,23 @@ async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
             document_type=document_type,
             file_size_bytes=file_size_bytes
         )
-    except Exception as exc:
-        logger.exception("Unable to process %s", source_file.name)
+    except DocumentFileError as exc:
+        logger.warning("Invalid document %s: %s", source_file.name, exc)
+        remove_temporary_audio(
+            f".{source_file.stem}_{transaction_id}.audio.part"
+        )
         await asyncio.to_thread(fail_source_file, source_file.name, transaction_id, str(exc))
+        retry_files.pop(source_file.name, None)
+        active_jobs.pop(transaction_id, None)
+    except Exception as exc:
+        logger.exception(
+            "Temporary/system error processing %s; returning it to the source folder",
+            source_file.name,
+        )
+        remove_temporary_audio(
+            f".{source_file.stem}_{transaction_id}.audio.part"
+        )
+        await asyncio.to_thread(retry_source_file, source_file.name, transaction_id, exc)
         active_jobs.pop(transaction_id, None)
     finally:
         scanner_active_file = None
@@ -458,7 +482,6 @@ async def run_pipeline_core(
         if (processed_dir / audio_temporary).exists():
             (processed_dir / audio_temporary).replace(processed_dir / audio_file)
 
-        from src.core.config import PROCESSING_DOCS_DIR
         source_file_path = Path(PROCESSING_DOCS_DIR) / filename
         if source_file_path.exists():
             source_date = datetime.fromtimestamp(source_file_path.stat().st_mtime, local_timezone).strftime("%Y-%m-%d")
@@ -523,15 +546,13 @@ async def run_pipeline_core(
             "audio_metrics": aud_m,
         }
         await asyncio.to_thread(finalize_source_file, filename, record)
+        retry_files.pop(filename, None)
         active_jobs.pop(transaction_id, None)
         logger.info("Successfully processed %s", filename)
         return record
-    except Exception as exc:
-        remove_generated_artifacts(base_name, audio_temporary)
-        await asyncio.to_thread(fail_source_file, filename, transaction_id, str(exc))
-        active_jobs.pop(transaction_id, None)
-        logger.exception("Error processing %s", filename)
-        return {"job_id": transaction_id, "filename": filename, "status": "error", "error": str(exc)}
+    except Exception:
+        remove_temporary_audio(audio_temporary)
+        raise
 
 
 def write_text_atomic(destination: Path, text: str) -> None:
@@ -540,20 +561,11 @@ def write_text_atomic(destination: Path, text: str) -> None:
     temporary.replace(destination)
 
 
-def remove_generated_artifacts(base_name: str, audio_temporary: str) -> None:
-    for path in (
-        PROCESSED_DOCS_DIR / audio_temporary,
-        PROCESSED_DOCS_DIR / f"{base_name}{SUMMARY_FILE_SUFFIX}",
-        PROCESSED_DOCS_DIR / f"{base_name}{TRANSLATION_FILE_SUFFIX}",
-        PROCESSED_DOCS_DIR / f"{base_name}{AUDIO_FILE_SUFFIX}",
-        PROCESSED_DOCS_DIR / f"{base_name}{MANIFEST_FILE_SUFFIX}",
-        PROCESSED_DOCS_DIR / f"{base_name}{MANIFEST_FILE_SUFFIX}.part",
-    ):
-        path.unlink(missing_ok=True)
+def remove_temporary_audio(audio_temporary: str) -> None:
+    (PROCESSED_DOCS_DIR / audio_temporary).unlink(missing_ok=True)
 
 
 def finalize_source_file(filename: str, record: dict[str, Any]) -> None:
-    from src.core.config import PROCESSING_DOCS_DIR
     source_file = Path(PROCESSING_DOCS_DIR) / filename
     manifest_file = PROCESSED_DOCS_DIR / f"{Path(filename).stem}{MANIFEST_FILE_SUFFIX}"
     temporary_manifest = manifest_file.with_suffix(manifest_file.suffix + ".part")
@@ -566,7 +578,6 @@ def finalize_source_file(filename: str, record: dict[str, Any]) -> None:
 
 
 def fail_source_file(filename: str, transaction_id: str, error: str) -> None:
-    from src.core.config import PROCESSING_DOCS_DIR
     source_file = Path(PROCESSING_DOCS_DIR) / filename
     destination = FAILED_FILES_DIR / filename
     if destination.exists():
@@ -587,6 +598,71 @@ def fail_source_file(filename: str, transaction_id: str, error: str) -> None:
     )
     if source_file.exists():
         source_file.replace(destination)
+
+
+def provider_retry_delay(error: Exception) -> float:
+    """Read a provider-supplied retry delay when one is present."""
+    message = str(error)
+    match = re.search(
+        r"retry(?:\s+in|\s+after|Delay[^0-9]*)\s*"
+        r"(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if not match or not any(match.groups()):
+        return 0.0
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = float(match.group(3) or 0.0)
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def retry_source_file(
+    filename: str,
+    transaction_id: str,
+    error: Exception,
+) -> None:
+    """Return a file to the source folder after a temporary/system failure."""
+    source_file = Path(PROCESSING_DOCS_DIR) / filename
+    previous = retry_files.pop(filename, None) or {}
+    attempts = int(previous.get("attempts", 0)) + 1
+    exponential_delay = min(
+        RETRY_INITIAL_DELAY_SECONDS * (2 ** (attempts - 1)),
+        RETRY_MAX_DELAY_SECONDS,
+    )
+    delay_seconds = min(
+        max(exponential_delay, provider_retry_delay(error)),
+        RETRY_MAX_DELAY_SECONDS,
+    )
+
+    destination = Path(INPUT_DOCS_DIR) / filename
+    if destination.exists():
+        timestamp = datetime.now(local_timezone).strftime("%Y%m%d_%H%M%S_%f")
+        destination = destination.with_name(
+            f"{destination.stem}_retry_{timestamp}{destination.suffix}"
+        )
+    if source_file.exists():
+        source_file.replace(destination)
+
+    retry_at_timestamp = time.time() + delay_seconds
+    retry_files[destination.name] = {
+        "filename": destination.name,
+        "status": "waiting_for_retry",
+        "attempts": attempts,
+        "retry_after_seconds": round(delay_seconds, 2),
+        "retry_at": datetime.fromtimestamp(
+            retry_at_timestamp, local_timezone
+        ).isoformat(),
+        "retry_at_timestamp": retry_at_timestamp,
+        "last_error": str(error),
+        "last_transaction_id": transaction_id,
+    }
+    logger.warning(
+        "Returned %s to the source folder; retry %s in %.2f seconds",
+        destination.name,
+        attempts,
+        delay_seconds,
+    )
 
 
 def parse_record_datetime(record: dict[str, Any]) -> datetime | None:
