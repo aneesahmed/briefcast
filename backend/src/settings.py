@@ -31,6 +31,14 @@ MAX_TOKEN_LIMIT = 600_000
 PAGE_TIER_CUTOFF = 60
 EXTRACT_WORKERS = 2
 
+# Minimum size and content guardrails
+MIN_FILE_SIZE_BYTES = {
+    ".pdf": 2048,   # 2 KB (corrupted/empty PDFs are < 1-2KB)
+    ".docx": 3072,  # 3 KB (empty docx archives are > 3KB)
+    ".txt": 1,      # 1 Byte (empty 0-byte text files are rejected)
+}
+MIN_CONTENT_WORDS = 1
+
 MODEL_OPTIONS = {
     "summary": (SUMMARY_MODEL,),
     "translation": (TRANSLATION_MODEL,),

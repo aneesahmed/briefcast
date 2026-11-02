@@ -19,6 +19,8 @@ from src.core.config import (
     EXTRACT_WORKERS,
     MAX_OCR_PAGES,
     MAX_TOKEN_LIMIT,
+    MIN_CONTENT_WORDS,
+    MIN_FILE_SIZE_BYTES,
     PAGE_TIER_CUTOFF,
     PDF_DOCUMENT_EXTENSION,
     TEXT_DOCUMENT_EXTENSION,
@@ -56,7 +58,17 @@ class DocumentService:
     @staticmethod
     def read_file(file_path: Path) -> tuple[str, dict, str]:
         """Extract text from one supported TXT, PDF, or DOCX document."""
+        if not file_path.exists():
+            raise DocumentFileError(f"{file_path.name} does not exist.")
+
+        file_size = file_path.stat().st_size
         ext = file_path.suffix.lower()
+        min_size = MIN_FILE_SIZE_BYTES.get(ext, 100)
+        if file_size < min_size:
+            raise DocumentFileError(
+                f"{file_path.name} is too small ({file_size} bytes). Minimum required for {ext.upper() or 'file'} is {min_size} bytes."
+            )
+
         if ext == TEXT_DOCUMENT_EXTENSION:
             try:
                 text = file_path.read_text(encoding="utf-8")
@@ -64,6 +76,11 @@ class DocumentService:
                 raise DocumentFileError(
                     f"{file_path.name} is not a valid UTF-8 text file."
                 ) from exc
+            word_count = len(text.split())
+            if word_count < MIN_CONTENT_WORDS:
+                raise DocumentFileError(
+                    f"{file_path.name} contains insufficient content ({word_count} words). Minimum required is {MIN_CONTENT_WORDS} words."
+                )
             estimated_tokens = len(text) // 4
             if estimated_tokens > MAX_TOKEN_LIMIT:
                 raise DocumentFileError(
@@ -165,6 +182,11 @@ class DocumentService:
                                 raise DocumentFileError(
                                     f"Scanned document {file_path.name} produced empty OCR output."
                                 )
+                            ocr_words = len(text_content.split())
+                            if ocr_words < MIN_CONTENT_WORDS:
+                                raise DocumentFileError(
+                                    f"Scanned document {file_path.name} produced insufficient text from OCR ({ocr_words} words). Minimum required is {MIN_CONTENT_WORDS} words."
+                                )
                             return text_content, usage, "image_pdf"
                         finally:
                             try:
@@ -209,7 +231,12 @@ class DocumentService:
                     # Collapse blank lines and whitespace runs to save tokens
                     text_content = collapse_whitespace(text_content)
                     
-                    # Pre-flight token limit check (characters / 4)
+                    # Pre-flight token limit and content word checks
+                    word_count = len(text_content.split())
+                    if word_count < MIN_CONTENT_WORDS:
+                        raise DocumentFileError(
+                            f"{file_path.name} contains insufficient content ({word_count} words). Minimum required is {MIN_CONTENT_WORDS} words."
+                        )
                     estimated_tokens = len(text_content) // 4
                     if estimated_tokens > MAX_TOKEN_LIMIT:
                         raise DocumentFileError(
@@ -237,6 +264,11 @@ class DocumentService:
                 for paragraph in document.paragraphs
                 if paragraph.text.strip()
             ).strip()
+            word_count = len(text_content.split())
+            if word_count < MIN_CONTENT_WORDS:
+                raise DocumentFileError(
+                    f"{file_path.name} contains insufficient content ({word_count} words). Minimum required is {MIN_CONTENT_WORDS} words."
+                )
             estimated_tokens = len(text_content) // 4
             if estimated_tokens > MAX_TOKEN_LIMIT:
                 raise DocumentFileError(
