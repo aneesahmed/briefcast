@@ -7,6 +7,7 @@ Keep this table aligned with https://ai.google.dev/gemini-api/docs/pricing.
 from typing import Any
 
 MODEL_PRICING_USD_PER_MILLION: dict[str, dict[str, float]] = {
+    "gemini-3.8-flash": {"input": 0.75, "output": 3.75},
     "gemini-3.7-flash": {"input": 0.75, "output": 3.75},
     "gemini-2.5-flash-preview-tts": {"input": 0.50, "output": 10.00},
     "gemini-3.1-flash-tts-preview": {"input": 1.00, "output": 20.00},

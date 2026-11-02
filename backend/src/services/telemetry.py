@@ -10,7 +10,13 @@ from src.services.pricing import (
     calculate_cost_usd,
     estimate_audio_output_tokens,
 )
-from src.settings import AUDIO_MODEL, PROCESSED_DOCS_DIR
+from src.settings import (
+    AUDIO_MODEL,
+    OCR_MODEL,
+    PROCESSED_DOCS_DIR,
+    SUMMARY_MODEL,
+    TRANSLATION_MODEL,
+)
 
 logger = logging.getLogger("uvicorn.info")
 
@@ -249,12 +255,15 @@ def _run_scan():
                     if isinstance(summary_metrics, dict)
                     else None
                 )
-                model_name = str(summary_model or "gemini-3.7-flash")
+                model_name = str(summary_model or SUMMARY_MODEL)
 
-                ocr_cost_usd = _metrics_cost(ocr_metrics, "gemini-3.7-flash")
-                summary_cost_usd = _metrics_cost(summary_metrics, "gemini-3.7-flash")
+                ocr_model_used = (ocr_metrics.get("model") if isinstance(ocr_metrics, dict) else None) or OCR_MODEL
+                tra_model_used = (translation_metrics.get("model") if isinstance(translation_metrics, dict) else None) or TRANSLATION_MODEL
+
+                ocr_cost_usd = _metrics_cost(ocr_metrics, ocr_model_used)
+                summary_cost_usd = _metrics_cost(summary_metrics, model_name)
                 translation_cost_usd = _metrics_cost(
-                    translation_metrics, "gemini-3.7-flash"
+                    translation_metrics, tra_model_used
                 )
                 audio_cost_usd = _metrics_cost(audio_metrics, AUDIO_MODEL)
 

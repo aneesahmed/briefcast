@@ -25,14 +25,18 @@ from src.services.document_service import DocumentFileError, DocumentService
 from src.services.pricing import calculate_cost_cents
 from src.settings import (
     AUDIO_FILE_SUFFIX,
+    AUDIO_MODEL,
     ERROR_FILE_SUFFIX,
     FAILED_FILES_DIR,
     INPUT_DOCS_DIR,
     MANIFEST_FILE_SUFFIX,
+    OCR_MODEL,
     PROCESSING_DOCS_DIR,
     PROCESSED_DOCS_DIR,
     SUMMARY_FILE_SUFFIX,
+    SUMMARY_MODEL,
     TRANSLATION_FILE_SUFFIX,
+    TRANSLATION_MODEL,
 )
 
 logger = logging.getLogger("uvicorn.info")
@@ -43,6 +47,34 @@ scanner_runtime_enabled = SCANNER_ENABLED
 scanner_task: asyncio.Task | None = None
 scanner_active_file: str | None = None
 scanner_stop_event = asyncio.Event()
+SYSTEM_ERROR_COUNTS: dict[str, int] = {}
+
+
+def classify_processing_error(exc: Exception) -> tuple[bool, str]:
+    """
+    Classify whether an exception is a file-level error (bad PDF, 400, safety block, etc.)
+    or a system/infrastructure error (network, timeout, 503, 401, persistent 429).
+    Returns (is_file_error, failure_reason).
+    """
+    if isinstance(exc, DocumentFileError):
+        return True, str(exc)
+        
+    error_str = str(exc)
+    error_lower = error_str.lower()
+    
+    # 400 Bad Request / Invalid Argument from Gemini
+    if "400" in error_str or "invalid_argument" in error_lower or "invalid argument" in error_lower:
+        return True, f"Gemini rejected document content (400 Invalid Argument): {exc}"
+        
+    # Safety block or content moderation block
+    if "safety" in error_lower or "blocked" in error_lower or "harm_category" in error_lower:
+        return True, f"Document content blocked by safety filters: {exc}"
+        
+    # Empty structured output or missing data after retries
+    if "returned no structured financial data" in error_lower or "empty structured output" in error_lower:
+        return True, f"Failed to extract structured data: {exc}"
+
+    return False, error_str
 scanner_system_error: dict[str, Any] | None = None
 local_timezone = datetime.now().astimezone().tzinfo
 
@@ -371,7 +403,7 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
 
 
 async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
-    global scanner_active_file, scanner_runtime_enabled, scanner_system_error
+    global scanner_active_file, scanner_runtime_enabled, scanner_system_error, SYSTEM_ERROR_COUNTS
 
     scanner_active_file = source_file.name
     try:
@@ -392,20 +424,46 @@ async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
             document_type=document_type,
             file_size_bytes=file_size_bytes
         )
-    except DocumentFileError as exc:
-        logger.warning("Invalid document %s: %s", source_file.name, exc)
-        remove_temporary_audio(
-            f".{source_file.stem}_{transaction_id}.audio.part"
-        )
-        await asyncio.to_thread(fail_source_file, source_file.name, transaction_id, str(exc))
-        active_jobs.pop(transaction_id, None)
+        # Success: clear any previous error counter for this file
+        SYSTEM_ERROR_COUNTS.pop(source_file.name, None)
     except Exception as exc:
-        logger.exception(
-            "Temporary/system error processing %s; returning it to the source folder",
-            source_file.name,
-        )
         remove_temporary_audio(
             f".{source_file.stem}_{transaction_id}.audio.part"
+        )
+        is_file_err, reason = classify_processing_error(exc)
+        
+        if is_file_err:
+            logger.warning("File error processing %s: %s", source_file.name, reason)
+            SYSTEM_ERROR_COUNTS.pop(source_file.name, None)
+            await asyncio.to_thread(fail_source_file, source_file.name, transaction_id, reason)
+            active_jobs.pop(transaction_id, None)
+            return
+
+        # System error: check repeat-offender guard
+        count = SYSTEM_ERROR_COUNTS.get(source_file.name, 0) + 1
+        SYSTEM_ERROR_COUNTS[source_file.name] = count
+
+        if count >= 2:
+            logger.error(
+                "Repeat-offender guard: %s caused system errors twice in a row. Moving to failed folder: %s",
+                source_file.name,
+                exc,
+            )
+            SYSTEM_ERROR_COUNTS.pop(source_file.name, None)
+            await asyncio.to_thread(
+                fail_source_file,
+                source_file.name,
+                transaction_id,
+                f"repeated system error: {exc}",
+            )
+            active_jobs.pop(transaction_id, None)
+            return
+
+        # First system error: return to source folder and pause scanner
+        logger.exception(
+            "System error processing %s (attempt %d); returning it to the source folder and pausing scanner",
+            source_file.name,
+            count,
         )
         record_scanner_system_error(exc, source_file.name, transaction_id)
         returned_filename = source_file.name
@@ -526,16 +584,20 @@ async def run_pipeline_core(
             logger.warning("Could not read audio duration for %s: %s", audio_file, e)
 
         ocr_m = final_state.get("ocr_metrics", {})
-        ocr_m["cost_cents"] = calculate_cost_cents(ocr_m, "gemini-3.7-flash")
+        ocr_model = ocr_m.get("model") or OCR_MODEL
+        ocr_m["cost_cents"] = calculate_cost_cents(ocr_m, ocr_model)
         
         sum_m = final_state.get("summary_metrics", {})
-        sum_m["cost_cents"] = calculate_cost_cents(sum_m, "gemini-3.7-flash")
+        sum_model = sum_m.get("model") or SUMMARY_MODEL
+        sum_m["cost_cents"] = calculate_cost_cents(sum_m, sum_model)
         
         tra_m = final_state.get("translation_metrics", {})
-        tra_m["cost_cents"] = calculate_cost_cents(tra_m, "gemini-3.7-flash")
+        tra_model = tra_m.get("model") or TRANSLATION_MODEL
+        tra_m["cost_cents"] = calculate_cost_cents(tra_m, tra_model)
         
         aud_m = final_state.get("audio_metrics", {})
-        aud_m["cost_cents"] = calculate_cost_cents(aud_m, "gemini-2.5-flash-preview-tts")
+        aud_model = aud_m.get("model") or AUDIO_MODEL
+        aud_m["cost_cents"] = calculate_cost_cents(aud_m, aud_model)
 
         total_cost_cents = round(ocr_m["cost_cents"] + sum_m["cost_cents"] + tra_m["cost_cents"] + aud_m["cost_cents"], 4)
         
@@ -547,6 +609,7 @@ async def run_pipeline_core(
             "original_filename": filename,
             "document_type": document_type,
             "ocr_size_bytes": file_size_bytes,
+            "ocr_truncated": bool(ocr_m.get("ocr_truncated", False)),
             "title": title,
             "status": "completed",
             "source_file_date": source_date,

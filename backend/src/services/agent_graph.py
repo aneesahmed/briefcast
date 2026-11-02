@@ -20,9 +20,12 @@ from src.core.config import (
 from src.models import FinancialReportExtraction
 from src.services.pricing import estimate_audio_output_tokens, usage_from_response
 from src.settings import (
+    AUDIO_FILE_SUFFIX,
     AUDIO_MODEL,
     FALLBACK_AUDIO_MODEL,
+    SUMMARY_FILE_SUFFIX,
     SUMMARY_MODEL,
+    TRANSLATION_FILE_SUFFIX,
     TRANSLATION_MODEL,
 )
 
@@ -55,6 +58,12 @@ def limit_words(text: str, maximum: int = SUMMARY_MAX_WORDS) -> str:
     return " ".join(text.strip().split()[:maximum])
 
 
+def write_text_atomic(target_path: Path, text: str) -> None:
+    temp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
+    temp_path.write_text(text, encoding="utf-8")
+    temp_path.replace(target_path)
+
+
 _cached_registry_csv = ""
 _last_pkl_mtime = 0.0
 
@@ -75,13 +84,47 @@ def get_registry_csv() -> str:
         
     return _cached_registry_csv
 
+
+def get_filtered_registry_csv(text: str) -> str:
+    """Trim the PSX registry to candidate matches found in document text to save prompt tokens."""
+    import re
+    from scripts.name_calling import StockRegistry
+    registry = StockRegistry()
+    
+    words = set(re.findall(r"\b[A-Za-z0-9]{2,15}\b", text.upper()))
+    stop_words = {
+        "THE", "AND", "FOR", "THAT", "THIS", "WITH", "FROM", "HAVE", "BEEN",
+        "COMPANY", "LIMITED", "LTD", "HOLDINGS", "PAKISTAN", "CORPORATION",
+        "BANK", "FUND", "INDUSTRIES", "MODARABA", "MILLS", "GROUP", "FINANCIAL",
+        "REPORT", "DIRECTORS", "BOARD", "MEETING", "OCTOBER", "SEPTEMBER",
+        "DECEMBER", "QUARTER", "ANNUAL", "PERIOD", "ENDED", "RS", "PKR",
+    }
+    
+    candidates = []
+    for r in registry.records.values():
+        if r.symbol in words:
+            candidates.append(f"{r.symbol} | {r.company} | {r.callname}")
+            continue
+        comp_words = [w for w in re.findall(r"\b[A-Za-z0-9]{3,15}\b", r.company.upper()) if w not in stop_words]
+        if comp_words and any(w in words for w in comp_words):
+            candidates.append(f"{r.symbol} | {r.company} | {r.callname}")
+            
+    if 0 < len(candidates) <= 60:
+        return "\n".join(candidates)
+        
+    return get_registry_csv()
+
+
 def extract_and_draft_summary(text: str, model: str, maximum_words: int) -> tuple[dict[str, Any], dict[str, int]]:
-    registry_csv = get_registry_csv()
+    # Trim registry to relevant candidate companies
+    registry_csv = get_filtered_registry_csv(text[:10000])
 
     prompt = (
         "Extract the title (from the subject line if given, otherwise extract a suitable title from the document). "
         "Extract the formal company name, official stock symbol, and conversational broadcast_callname. "
         "Also extract financial results and corporate actions.\n\n"
+        "For multi-fund reports or collective investment scheme announcements covering multiple sub-funds, "
+        "summarize the overall results and key performance across the fund group as a whole rather than repeating each single fund in isolation.\n\n"
         f"Additionally, write one concise English financial broadcast paragraph summarizing the data in english_summary_draft. "
         f"Use active voice and no more than {maximum_words} words. "
         "Refer to the company exclusively by its conversational broadcast_callname in the summary. "
@@ -93,21 +136,39 @@ def extract_and_draft_summary(text: str, model: str, maximum_words: int) -> tupl
         f"PSX REGISTRY:\n{registry_csv}"
     )
 
-    response = get_gemini_client().models.generate_content(
-        model=model,
-        contents=[
-            text,
-            prompt,
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=FinancialReportExtraction,
-            temperature=0.2,
-            thinking_config=types.ThinkingConfig(thinking_level="LOW"),
-        ),
-    )
-    if response.parsed is None:
-        raise ValueError("Gemini returned no structured financial data")
+    last_error = None
+    response = None
+    for attempt in range(2):
+        try:
+            response = get_gemini_client().models.generate_content(
+                model=model,
+                contents=[
+                    text,
+                    prompt,
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=FinancialReportExtraction,
+                    temperature=0.2,
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+                ),
+            )
+            if response.parsed is not None:
+                break
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            if "400" in err_str or "invalid_argument" in err_str.lower() or "safety" in err_str.lower():
+                raise
+            if attempt < 1:
+                time.sleep(1)
+                continue
+            raise
+
+    if response is None or response.parsed is None:
+        if last_error:
+            raise last_error
+        raise ValueError("Gemini returned no structured financial data after retry")
     
     usage = usage_from_response(response, model)
         
@@ -169,6 +230,13 @@ async def summarize_node(state: DocumentState) -> dict[str, Any]:
     summary = extracted_data.get("english_summary_draft", "")
     summary = limit_words(summary, maximum_words)
     
+    # Incrementally write summary artifact immediately
+    output_dir = Path(state.get("output_dir", ""))
+    filename = state.get("filename", "")
+    if output_dir and filename:
+        base_name = Path(filename).stem
+        write_text_atomic(output_dir / f"{base_name}{SUMMARY_FILE_SUFFIX}", summary)
+    
     return {
         "english_summary": summary,
         "callname": callname,
@@ -195,6 +263,14 @@ async def translate_node(state: DocumentState) -> dict[str, Any]:
     translation, translation_usage = await asyncio.to_thread(
         translate_summary, state["english_summary"], model
     )
+
+    # Incrementally write translation artifact immediately
+    output_dir = Path(state.get("output_dir", ""))
+    filename = state.get("filename", "")
+    if output_dir and filename:
+        base_name = Path(filename).stem
+        write_text_atomic(output_dir / f"{base_name}{TRANSLATION_FILE_SUFFIX}", translation)
+
     return {
         "urdu_summary": translation,
         "translation_metrics": {
@@ -242,8 +318,6 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
     
     active_model = model
     billable_requests: list[dict[str, Any]] = []
-    if model == AUDIO_MODEL and time.time() < _flash_audio_quota_reset_time:
-        active_model = FALLBACK_AUDIO_MODEL
 
     def get_audio_config():
         return types.GenerateContentConfig(
@@ -283,22 +357,21 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         except Exception as e:
             error_str = str(e)
             if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
-                if active_model == model:
-                    import re
-                    match = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d\.]+)s)?", error_str)
-                    delay = 3600 # Default to 1 hour if parsing fails
-                    if match:
-                        hours = int(match.group(1) or 0)
-                        minutes = int(match.group(2) or 0)
-                        seconds = float(match.group(3) or 0.0)
-                        delay = hours * 3600 + minutes * 60 + seconds
-                    _flash_audio_quota_reset_time = time.time() + delay
-                    
-                    # Switch to fallback model and retry
-                    active_model = FALLBACK_AUDIO_MODEL if model == AUDIO_MODEL else model
+                import re
+                match = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d\.]+)s)?", error_str)
+                delay = 5.0
+                if match:
+                    hours = int(match.group(1) or 0)
+                    minutes = int(match.group(2) or 0)
+                    seconds = float(match.group(3) or 0.0)
+                    delay = hours * 3600 + minutes * 60 + seconds
+                
+                # Retry if within acceptable backoff window (<= 60s)
+                if attempt < 2 and delay <= 60:
+                    await asyncio.sleep(delay)
                     continue
-                else:
-                    raise ValueError(f"Gemini API Quota Exceeded for fallback model: {e}")
+                # If persistent or exceeds retry limit, propagate to pause scanner
+                raise
             else:
                 if attempt < 2:
                     await asyncio.sleep(2)
@@ -318,19 +391,10 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         content = getattr(candidate, "content", None)
         if content is None:
             reason = getattr(candidate, "finish_reason", "unknown")
-            if str(reason) == "FinishReason.OTHER" or str(reason) == "OTHER":
-                if active_model == AUDIO_MODEL:
-                    active_model = FALLBACK_AUDIO_MODEL
-                    continue
-                if attempt < 2:
-                    await asyncio.sleep(2)
-                    continue
-                raise ValueError("Gemini TTS failed to generate audio (FinishReason: OTHER). Text might be fully blocked.")
-            
             if attempt < 2:
                 await asyncio.sleep(2)
                 continue
-            raise ValueError(f"Gemini returned no audio data (finish reason: {reason}).")
+            raise ValueError(f"Gemini TTS failed to generate audio (FinishReason: {reason}).")
             
         parts = getattr(content, "parts", None)
         if not parts:

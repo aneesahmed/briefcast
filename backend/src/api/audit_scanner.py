@@ -6,7 +6,7 @@ from datetime import datetime
 import aiosqlite
 from typing import Any
 
-from src.settings import PROCESSED_DOCS_DIR
+from src.settings import PROCESSED_DOCS_DIR, SUMMARY_MODEL, TRANSLATION_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -122,13 +122,13 @@ async def process_manifest(manifest_path: Path, db: aiosqlite.Connection, pricin
         sum_size = get_file_size(data.get("summary_file"))
         sum_in = int(sum_size * 2) # Arbitrary fallback estimate: input was ~2x output
         sum_out = int(sum_size / 4) # English characters / 4
-        sum_cost = compute_cost_cents(sum_in, sum_out, "gemini-3.7-flash", pricing)
+        sum_cost = compute_cost_cents(sum_in, sum_out, SUMMARY_MODEL, pricing)
         
         # Estimate translation tokens
         tra_size = get_file_size(data.get("translation_file"))
         tra_in = sum_out # input was english summary
         tra_out = int(tra_size / 2.5) # Urdu characters / 2.5
-        tra_cost = compute_cost_cents(tra_in, tra_out, "gemini-3.7-flash", pricing)
+        tra_cost = compute_cost_cents(tra_in, tra_out, TRANSLATION_MODEL, pricing)
         
         # Estimate audio tokens
         aud_in = int(tra_size / 2) # TTS is billed on character length. Urdu is ~2 bytes per char.
