@@ -74,3 +74,44 @@ def test_document_errors_classified_as_file_error():
     is_file, reason = classify_processing_error(arbitrary_parsing_err)
     assert is_file is True
     assert "Document processing failed" in reason
+
+
+def test_audio_call_tracking_and_quota_error():
+    from src.services.agent_graph import (
+        DailyQuotaExhaustedError,
+        get_audio_call_count,
+        record_audio_call,
+    )
+
+    model_test = "gemini-test-tts"
+    initial_count = get_audio_call_count(model_test)
+    record_audio_call(model_test)
+    assert get_audio_call_count(model_test) == initial_count + 1
+
+    err = DailyQuotaExhaustedError(delay_seconds=46469.0, message="Quota exhausted for all models")
+    assert err.delay_seconds == 46469.0
+    assert "Quota exhausted" in str(err)
+
+
+def test_scanner_quota_pause_and_status():
+    import time
+    from src.api.routes import (
+        pause_scanner_for_quota,
+        scanner_status,
+    )
+    import src.api.routes as routes
+
+    # Trigger a 1000s quota pause
+    pause_scanner_for_quota(1000.0, "All models reached daily limit")
+    status = scanner_status()
+    assert status["quota_paused"] is True
+    assert status["quota_pause_remaining_seconds"] > 900
+    assert status["quota_pause_reason"] == "All models reached daily limit"
+    assert status["quota_resumes_at"] is not None
+
+    # Clear pause
+    routes.scanner_quota_pause_until = None
+    routes.scanner_quota_pause_reason = None
+    status_cleared = scanner_status()
+    assert status_cleared["quota_paused"] is False
+

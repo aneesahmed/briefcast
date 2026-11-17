@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ from src.services.pricing import estimate_audio_output_tokens, usage_from_respon
 from src.settings import (
     AUDIO_FILE_SUFFIX,
     AUDIO_MODEL,
+    DAILY_AUDIO_LIMIT_PER_MODEL,
     FALLBACK_AUDIO_MODEL,
     FALLBACK_SUMMARY_MODEL,
     FALLBACK_TRANSLATION_MODEL,
@@ -323,10 +325,39 @@ def write_mp3(pcm_bytes: bytes, output_file: Path, sample_rate: int) -> None:
     output_file.write_bytes(encoder.encode(pcm_bytes) + encoder.flush())
 
 
+class DailyQuotaExhaustedError(RuntimeError):
+    """Raised when all audio models have exhausted their daily quota."""
+    def __init__(self, delay_seconds: float, message: str):
+        super().__init__(message)
+        self.delay_seconds = delay_seconds
+        self.resume_time = time.time() + delay_seconds
+
+
 _flash_audio_quota_reset_time = 0.0
+_fallback_audio_quota_reset_time = 0.0
+_audio_call_tracker: dict[str, Any] = {
+    "date": "",
+    "counts": {}
+}
+
+
+def record_audio_call(model_name: str) -> None:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _audio_call_tracker["date"] != today:
+        _audio_call_tracker["date"] = today
+        _audio_call_tracker["counts"] = {}
+    _audio_call_tracker["counts"][model_name] = _audio_call_tracker["counts"].get(model_name, 0) + 1
+
+
+def get_audio_call_count(model_name: str) -> int:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _audio_call_tracker["date"] != today:
+        return 0
+    return _audio_call_tracker["counts"].get(model_name, 0)
+
 
 async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
-    global _flash_audio_quota_reset_time
+    global _flash_audio_quota_reset_time, _fallback_audio_quota_reset_time
     urdu_text = state.get("urdu_summary", "")
     if not urdu_text:
         return {"audio_path": "", "audio_metrics": {}}
@@ -345,10 +376,28 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
     )
     started = time.time()
     
+    now = time.time()
     active_model = model
-    # If primary audio model reached daily quota earlier, immediately route to fallback
-    if active_model == AUDIO_MODEL and time.time() < _flash_audio_quota_reset_time and FALLBACK_AUDIO_MODEL:
+
+    # Check preventive daily call counter and API reset timers for primary model
+    primary_exhausted = (now < _flash_audio_quota_reset_time) or (get_audio_call_count(AUDIO_MODEL) >= DAILY_AUDIO_LIMIT_PER_MODEL)
+    if active_model == AUDIO_MODEL and primary_exhausted and FALLBACK_AUDIO_MODEL:
         active_model = FALLBACK_AUDIO_MODEL
+
+    # If fallback model is also exhausted, wait until next day / reset timer!
+    fallback_exhausted = (now < _fallback_audio_quota_reset_time) or (get_audio_call_count(FALLBACK_AUDIO_MODEL) >= DAILY_AUDIO_LIMIT_PER_MODEL)
+    if active_model == FALLBACK_AUDIO_MODEL and fallback_exhausted:
+        now_dt = datetime.now(timezone.utc)
+        tomorrow = (now_dt + timedelta(days=1)).replace(hour=0, minute=0, second=5, microsecond=0)
+        default_seconds = max(3600.0, (tomorrow - now_dt).total_seconds())
+        remaining = max(_flash_audio_quota_reset_time - now, _fallback_audio_quota_reset_time - now, default_seconds)
+        raise DailyQuotaExhaustedError(
+            delay_seconds=remaining,
+            message=(
+                f"Both audio models ({AUDIO_MODEL} and {FALLBACK_AUDIO_MODEL}) have reached their daily limit "
+                f"of {DAILY_AUDIO_LIMIT_PER_MODEL} calls today. Service will wait and automatically resume in {remaining / 3600:.1f} hours."
+            )
+        )
 
     billable_requests: list[dict[str, Any]] = []
 
@@ -409,6 +458,17 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
                     active_model = FALLBACK_AUDIO_MODEL
                     await asyncio.sleep(2)
                     continue
+
+                # If active_model is already FALLBACK_AUDIO_MODEL, both models are now exhausted!
+                if active_model == FALLBACK_AUDIO_MODEL:
+                    _fallback_audio_quota_reset_time = time.time() + delay
+                    raise DailyQuotaExhaustedError(
+                        delay_seconds=delay,
+                        message=(
+                            f"Daily quota reached for both audio models ({AUDIO_MODEL} and {FALLBACK_AUDIO_MODEL}). "
+                            f"Service will wait and automatically resume in {delay / 3600:.1f} hours."
+                        )
+                    )
 
                 # Retry if within acceptable backoff window (<= 60s)
                 if attempt < 2 and delay <= 60:
@@ -474,6 +534,7 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         billable_requests[-1]["output_tokens_estimated"] = True
 
     await asyncio.to_thread(write_mp3, pcm_bytes, output_file, AUDIO_SAMPLE_RATE_HZ)
+    record_audio_call(active_model)
     input_tokens = sum(request["input_tokens"] for request in billable_requests)
     output_tokens = sum(request["output_tokens"] for request in billable_requests)
     thinking_tokens = sum(request["thinking_tokens"] for request in billable_requests)

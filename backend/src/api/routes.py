@@ -20,7 +20,7 @@ from src.core.config import (
 )
 from src.core.security import encrypt_url, generate_new_key, set_new_key
 from src.models import PipelineConfig
-from src.services.agent_graph import document_graph
+from src.services.agent_graph import DailyQuotaExhaustedError, document_graph
 from src.services.document_service import DocumentFileError, DocumentService
 from src.services.pricing import calculate_cost_cents
 from src.settings import (
@@ -152,7 +152,31 @@ def classify_processing_error(exc: Exception) -> tuple[bool, str]:
     # Treat as document/file-level processing failure so the scanner moves to the next document.
     return True, f"Document processing failed: {exc}"
 scanner_system_error: dict[str, Any] | None = None
+scanner_quota_pause_until: float | None = None
+scanner_quota_pause_reason: str | None = None
 local_timezone = datetime.now().astimezone().tzinfo
+
+
+def pause_scanner_for_quota(delay_seconds: float, reason: str) -> None:
+    global scanner_quota_pause_until, scanner_quota_pause_reason
+    scanner_quota_pause_until = time.time() + delay_seconds
+    scanner_quota_pause_reason = reason
+    try:
+        resume_dt = datetime.fromtimestamp(scanner_quota_pause_until, tz=local_timezone)
+        formatted_time = resume_dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        formatted_time = f"in {delay_seconds / 3600:.1f} hours"
+
+    logger.warning(
+        "=== DAILY QUOTA LIMIT REACHED ===\n"
+        "%s\n"
+        "Scanner is pausing and waiting until %s (~%.1f hours).\n"
+        "Service will automatically resume processing when quota resets.\n"
+        "=================================",
+        reason,
+        formatted_time,
+        delay_seconds / 3600,
+    )
 
 
 @router.get("/api/health", tags=["Health"])
@@ -393,12 +417,23 @@ def title_from_filename(filename: str) -> str:
 def scanner_status() -> dict[str, Any]:
     running = scanner_task is not None and not scanner_task.done()
     configuration_error = scanner_configuration_error()
+    quota_paused = bool(scanner_quota_pause_until and time.time() < scanner_quota_pause_until)
+    resume_iso = None
+    if quota_paused and scanner_quota_pause_until:
+        try:
+            resume_iso = datetime.fromtimestamp(scanner_quota_pause_until, tz=local_timezone).isoformat()
+        except Exception:
+            resume_iso = str(scanner_quota_pause_until)
     return {
         "running": running,
         "enabled": scanner_runtime_enabled,
         "interval_seconds": SCANNER_INTERVAL_SECONDS,
         "active_files": [scanner_active_file] if scanner_active_file else [],
         "processing_count": len(active_jobs),
+        "quota_paused": quota_paused,
+        "quota_resumes_at": resume_iso,
+        "quota_pause_remaining_seconds": max(0, int(scanner_quota_pause_until - time.time())) if quota_paused and scanner_quota_pause_until else 0,
+        "quota_pause_reason": scanner_quota_pause_reason if quota_paused else None,
         "stopped_due_to_system_error": scanner_system_error is not None,
         "system_error": scanner_system_error,
         "configuration_ready": configuration_error is None,
@@ -425,6 +460,9 @@ def is_file_locked(filepath: Path) -> bool:
         return True
 
 async def scan_input_folder(stop_when_paused: bool = False) -> None:
+    if scanner_quota_pause_until and time.time() < scanner_quota_pause_until:
+        return
+
     supported = set(SUPPORTED_DOCUMENT_EXTENSIONS)
     source_dir = Path(INPUT_DOCS_DIR)
     source_files = sorted(source_dir.iterdir(), key=lambda path: path.name.casefold())
@@ -508,10 +546,34 @@ async def process_scanner_file(source_file: Path, transaction_id: str) -> None:
         )
         # Success: clear any previous error counter for this file
         SYSTEM_ERROR_COUNTS.pop(source_file.name, None)
+    except DailyQuotaExhaustedError as quota_err:
+        remove_temporary_audio(
+            f".{source_file.stem}_{transaction_id}.audio.part"
+        )
+        returned_filename = await asyncio.to_thread(return_source_file, source_file.name)
+        active_jobs.pop(transaction_id, None)
+        pause_scanner_for_quota(quota_err.delay_seconds, str(quota_err))
+        return
     except Exception as exc:
         remove_temporary_audio(
             f".{source_file.stem}_{transaction_id}.audio.part"
         )
+        err_str = str(exc)
+        if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str:
+            import re
+            match = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d\.]+)s)?", err_str)
+            delay = 3600.0
+            if match:
+                hours = int(match.group(1) or 0)
+                minutes = int(match.group(2) or 0)
+                seconds = float(match.group(3) or 0.0)
+                delay = hours * 3600 + minutes * 60 + seconds
+            if delay > 60:
+                returned_filename = await asyncio.to_thread(return_source_file, source_file.name)
+                active_jobs.pop(transaction_id, None)
+                pause_scanner_for_quota(delay, f"API quota exhausted: {exc}")
+                return
+
         is_file_err, reason = classify_processing_error(exc)
         
         if is_file_err:
@@ -830,7 +892,25 @@ async def load_completed_manifests() -> list[dict[str, Any]]:
 
 
 async def scanner_loop() -> None:
+    global scanner_quota_pause_until, scanner_quota_pause_reason
     while scanner_runtime_enabled:
+        # If waiting for quota reset, sleep in non-blocking slices until reset time
+        if scanner_quota_pause_until:
+            if time.time() < scanner_quota_pause_until:
+                remaining = scanner_quota_pause_until - time.time()
+                sleep_chunk = min(remaining, 30.0)
+                try:
+                    await asyncio.wait_for(scanner_stop_event.wait(), timeout=sleep_chunk)
+                    if scanner_stop_event.is_set():
+                        break
+                except TimeoutError:
+                    pass
+                continue
+            else:
+                logger.info("Daily quota reset period reached! Automatically resuming scanner processing.")
+                scanner_quota_pause_until = None
+                scanner_quota_pause_reason = None
+
         try:
             await scan_input_folder(stop_when_paused=True)
         except asyncio.CancelledError:
@@ -850,13 +930,15 @@ async def scanner_loop() -> None:
 
 
 async def start_folder_scanner() -> None:
-    global scanner_runtime_enabled, scanner_system_error, scanner_task
+    global scanner_runtime_enabled, scanner_system_error, scanner_task, scanner_quota_pause_until, scanner_quota_pause_reason
 
     configuration_error = scanner_configuration_error()
     if configuration_error:
         record_scanner_system_error(configuration_error)
         raise RuntimeError(configuration_error)
     scanner_system_error = None
+    scanner_quota_pause_until = None
+    scanner_quota_pause_reason = None
     scanner_runtime_enabled = True
     scanner_stop_event.clear()
     if scanner_task is None or scanner_task.done():
