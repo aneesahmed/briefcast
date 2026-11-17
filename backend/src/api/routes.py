@@ -50,31 +50,107 @@ scanner_stop_event = asyncio.Event()
 SYSTEM_ERROR_COUNTS: dict[str, int] = {}
 
 
-def classify_processing_error(exc: Exception) -> tuple[bool, str]:
+def is_system_or_connectivity_error(exc: Exception) -> bool:
     """
-    Classify whether an exception is a file-level error (bad PDF, 400, safety block, etc.)
-    or a system/infrastructure error (network, timeout, 503, 401, persistent 429).
-    Returns (is_file_error, failure_reason).
+    Determine if an exception is an external infrastructure/system failure
+    (e.g., loss of internet, DNS resolution failure, network timeout,
+    missing/invalid API credentials, total account quota exhaustion, or full disk).
     """
-    if isinstance(exc, DocumentFileError):
-        return True, str(exc)
-        
     error_str = str(exc)
     error_lower = error_str.lower()
-    
-    # 400 Bad Request / Invalid Argument from Gemini
-    if "400" in error_str or "invalid_argument" in error_lower or "invalid argument" in error_lower:
+    exc_type_name = type(exc).__name__.lower()
+
+    # Network / socket / DNS connectivity failures
+    connectivity_keywords = (
+        "nameresolutionerror",
+        "getaddrinfo failed",
+        "failed to resolve",
+        "connection refused",
+        "connection reset",
+        "network is unreachable",
+        "connection error",
+        "connecterror",
+        "clientconnectorerror",
+        "connection closed",
+        "server disconnected",
+    )
+    if any(kw in error_lower or kw in exc_type_name for kw in connectivity_keywords):
+        return True
+
+    # Standard network / connection exception types
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+
+    # Account-level authentication / credential failures
+    auth_keywords = (
+        "api_key is required",
+        "api_key is missing",
+        "api_key_invalid",
+        "api key not valid",
+        "unauthenticated",
+        "401 unauthorized",
+        "status_code=401",
+    )
+    if any(kw in error_lower for kw in auth_keywords):
+        return True
+
+    # Account quota exhaustion (429 RESOURCE_EXHAUSTED)
+    if "resource_exhausted" in error_lower or "quota exceeded" in error_lower:
+        return True
+
+    # Upstream service outage
+    outage_keywords = (
+        "502 bad gateway",
+        "503 service unavailable",
+        "504 gateway timeout",
+    )
+    if any(kw in error_lower for kw in outage_keywords):
+        return True
+
+    # Disk full / OS storage exhaustion
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) in (28,):  # ENOSPC
+        return True
+
+    return False
+
+
+def classify_processing_error(exc: Exception) -> tuple[bool, str]:
+    """
+    Classify whether an exception is a file-level error or a system/connectivity error.
+    Returns (is_file_error, failure_reason).
+
+    If it is a system or connectivity error (e.g., internet down, DNS failure,
+    quota exhausted, invalid API key), returns (False, error_str) to pause the scanner.
+
+    Any other error (corrupted file, unreadable PDF, safety filter, Gemini TTS failure,
+    translation failure, structured data error, ValueError, etc.) is treated as a 
+    file-level error: returns (True, reason), which moves the file to failed_files/
+    and allows the scanner to proceed to the next document.
+    """
+    if is_system_or_connectivity_error(exc):
+        return False, str(exc)
+
+    if isinstance(exc, DocumentFileError):
+        return True, str(exc)
+
+    error_str = str(exc)
+    error_lower = error_str.lower()
+
+    if "400" in error_str or "invalid_argument" in error_lower:
         return True, f"Gemini rejected document content (400 Invalid Argument): {exc}"
-        
-    # Safety block or content moderation block
+
     if "safety" in error_lower or "blocked" in error_lower or "harm_category" in error_lower:
         return True, f"Document content blocked by safety filters: {exc}"
-        
-    # Empty structured output or missing data after retries
-    if "returned no structured financial data" in error_lower or "empty structured output" in error_lower:
+
+    if "gemini tts failed" in error_lower or "finishreason" in error_lower:
+        return True, f"Text-to-speech audio generation failed: {exc}"
+
+    if "empty structured output" in error_lower or "returned no structured financial data" in error_lower:
         return True, f"Failed to extract structured data: {exc}"
 
-    return False, error_str
+    # Default for all other errors occurring while processing a document:
+    # Treat as document/file-level processing failure so the scanner moves to the next document.
+    return True, f"Document processing failed: {exc}"
 scanner_system_error: dict[str, Any] | None = None
 local_timezone = datetime.now().astimezone().tzinfo
 
@@ -383,7 +459,13 @@ async def scan_input_folder(stop_when_paused: bool = False) -> None:
         processing_file = Path(PROCESSING_DOCS_DIR) / source_file.name
         
         # Now safe to move since we checked for locks
-        source_file.replace(processing_file)
+        try:
+            source_file.replace(processing_file)
+        except Exception as move_err:
+            logger.warning(
+                f"Could not move {source_file.name} to processing folder: {move_err}. Skipping to next file."
+            )
+            continue
         
         active_jobs[transaction_id] = {
             "id": transaction_id,

@@ -383,6 +383,8 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
 
         if not getattr(response, "candidates", None):
             if attempt < 2:
+                if FALLBACK_AUDIO_MODEL and active_model != FALLBACK_AUDIO_MODEL:
+                    active_model = FALLBACK_AUDIO_MODEL
                 await asyncio.sleep(2)
                 continue
             raise ValueError("Gemini returned no candidates.")
@@ -392,6 +394,8 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         if content is None:
             reason = getattr(candidate, "finish_reason", "unknown")
             if attempt < 2:
+                if FALLBACK_AUDIO_MODEL and active_model != FALLBACK_AUDIO_MODEL:
+                    active_model = FALLBACK_AUDIO_MODEL
                 await asyncio.sleep(2)
                 continue
             raise ValueError(f"Gemini TTS failed to generate audio (FinishReason: {reason}).")
@@ -399,6 +403,8 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         parts = getattr(content, "parts", None)
         if not parts:
             if attempt < 2:
+                if FALLBACK_AUDIO_MODEL and active_model != FALLBACK_AUDIO_MODEL:
+                    active_model = FALLBACK_AUDIO_MODEL
                 await asyncio.sleep(2)
                 continue
             raise ValueError("Gemini returned content but no parts.")
@@ -406,6 +412,8 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
         inline_data = getattr(parts[0], "inline_data", None)
         if inline_data is None or not getattr(inline_data, "data", None):
             if attempt < 2:
+                if FALLBACK_AUDIO_MODEL and active_model != FALLBACK_AUDIO_MODEL:
+                    active_model = FALLBACK_AUDIO_MODEL
                 await asyncio.sleep(2)
                 continue
             raise ValueError("Gemini returned an empty audio response")

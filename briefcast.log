@@ -1,0 +1,7 @@
+2026-11-13 17:54:31,359 - INFO - Started server process [6028]
+2026-11-13 17:54:31,359 - INFO - Waiting for application startup.
+2026-11-13 17:54:31,390 - INFO - Application startup complete.
+2026-11-14 13:13:27,213 - INFO - Shutting down
+2026-11-14 13:13:27,324 - INFO - Waiting for application shutdown.
+2026-11-14 13:13:27,324 - INFO - Application shutdown complete.
+2026-11-14 13:13:27,324 - INFO - Finished server process [6028]
