@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import time
 from functools import lru_cache
@@ -23,11 +24,15 @@ from src.settings import (
     AUDIO_FILE_SUFFIX,
     AUDIO_MODEL,
     FALLBACK_AUDIO_MODEL,
+    FALLBACK_SUMMARY_MODEL,
+    FALLBACK_TRANSLATION_MODEL,
     SUMMARY_FILE_SUFFIX,
     SUMMARY_MODEL,
     TRANSLATION_FILE_SUFFIX,
     TRANSLATION_MODEL,
 )
+
+logger = logging.getLogger("uvicorn.info")
 
 
 class DocumentState(TypedDict, total=False):
@@ -138,10 +143,11 @@ def extract_and_draft_summary(text: str, model: str, maximum_words: int) -> tupl
 
     last_error = None
     response = None
+    active_model = model
     for attempt in range(2):
         try:
             response = get_gemini_client().models.generate_content(
-                model=model,
+                model=active_model,
                 contents=[
                     text,
                     prompt,
@@ -160,6 +166,11 @@ def extract_and_draft_summary(text: str, model: str, maximum_words: int) -> tupl
             err_str = str(e)
             if "400" in err_str or "invalid_argument" in err_str.lower() or "safety" in err_str.lower():
                 raise
+            if ("RESOURCE_EXHAUSTED" in err_str or "429" in err_str) and FALLBACK_SUMMARY_MODEL and active_model != FALLBACK_SUMMARY_MODEL:
+                logger.warning("Summary model %s quota exhausted. Falling back to %s", active_model, FALLBACK_SUMMARY_MODEL)
+                active_model = FALLBACK_SUMMARY_MODEL
+                time.sleep(1)
+                continue
             if attempt < 1:
                 time.sleep(1)
                 continue
@@ -170,7 +181,7 @@ def extract_and_draft_summary(text: str, model: str, maximum_words: int) -> tupl
             raise last_error
         raise ValueError("Gemini returned no structured financial data after retry")
     
-    usage = usage_from_response(response, model)
+    usage = usage_from_response(response, active_model)
         
     if hasattr(response.parsed, "model_dump"):
         return response.parsed.model_dump(), usage
@@ -187,18 +198,36 @@ def translate_summary(summary: str, model: str) -> tuple[str, dict[str, Any]]:
         "Return only the Urdu translation.\n\n"
         f"{summary}"
     )
-    response = get_gemini_client().models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.1,
-            thinking_config=types.ThinkingConfig(thinking_level="LOW")
-        ),
-    )
-    if not response.text:
-        raise ValueError("Gemini returned no Urdu translation")
-    usage = usage_from_response(response, model)
-    return response.text.strip(), usage
+    active_model = model
+    last_err = None
+    for attempt in range(2):
+        try:
+            response = get_gemini_client().models.generate_content(
+                model=active_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW")
+                ),
+            )
+            if response.text:
+                usage = usage_from_response(response, active_model)
+                return response.text.strip(), usage
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            if ("RESOURCE_EXHAUSTED" in err_str or "429" in err_str) and FALLBACK_TRANSLATION_MODEL and active_model != FALLBACK_TRANSLATION_MODEL:
+                logger.warning("Translation model %s quota exhausted. Falling back to %s", active_model, FALLBACK_TRANSLATION_MODEL)
+                active_model = FALLBACK_TRANSLATION_MODEL
+                time.sleep(1)
+                continue
+            if attempt < 1:
+                time.sleep(1)
+                continue
+            raise
+    if last_err:
+        raise last_err
+    raise ValueError("Gemini returned no Urdu translation")
 
 
 def json_text(value: dict[str, Any]) -> str:
@@ -317,6 +346,10 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
     started = time.time()
     
     active_model = model
+    # If primary audio model reached daily quota earlier, immediately route to fallback
+    if active_model == AUDIO_MODEL and time.time() < _flash_audio_quota_reset_time and FALLBACK_AUDIO_MODEL:
+        active_model = FALLBACK_AUDIO_MODEL
+
     billable_requests: list[dict[str, Any]] = []
 
     def get_audio_config():
@@ -359,13 +392,24 @@ async def generate_audio_node(state: DocumentState) -> dict[str, Any]:
             if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
                 import re
                 match = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d\.]+)s)?", error_str)
-                delay = 5.0
+                delay = 3600.0
                 if match:
                     hours = int(match.group(1) or 0)
                     minutes = int(match.group(2) or 0)
                     seconds = float(match.group(3) or 0.0)
                     delay = hours * 3600 + minutes * 60 + seconds
                 
+                # If primary model quota exhausted, remember reset time and switch to fallback
+                if active_model == AUDIO_MODEL and FALLBACK_AUDIO_MODEL:
+                    _flash_audio_quota_reset_time = time.time() + delay
+                    logger.warning(
+                        "Audio model %s quota exhausted. Automatically falling back to %s (quota resets in %.0fs)",
+                        active_model, FALLBACK_AUDIO_MODEL, delay
+                    )
+                    active_model = FALLBACK_AUDIO_MODEL
+                    await asyncio.sleep(2)
+                    continue
+
                 # Retry if within acceptable backoff window (<= 60s)
                 if attempt < 2 and delay <= 60:
                     await asyncio.sleep(delay)

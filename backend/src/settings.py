@@ -1,27 +1,28 @@
+import os
 from pathlib import Path
 
 # Project directories
-BRIEFING_SOURCE_DIR = Path(r"C:\working\AI26\briefcast\briefing_source")
-PROCESSING_FILES_DIR = Path(r"C:\working\AI26\briefcast\processing_files")
-PROCESSED_FILES_DIR = Path(r"C:\working\AI26\briefcast\processed_files")
-FAILED_FILES_DIR = Path(r"C:\working\AI26\briefcast\failed_files")
-LOG_FILE_PATH = Path(r"C:\working\AI26\briefcast\briefcast.log")
+BRIEFING_SOURCE_DIR = Path(os.getenv("BRIEFING_SOURCE_DIR", r"C:\working\AI26\briefcast\briefing_source"))
+PROCESSING_FILES_DIR = Path(os.getenv("PROCESSING_FILES_DIR", r"C:\working\AI26\briefcast\processing_files"))
+PROCESSED_FILES_DIR = Path(os.getenv("PROCESSED_FILES_DIR", r"C:\working\AI26\briefcast\processed_files"))
+FAILED_FILES_DIR = Path(os.getenv("FAILED_FILES_DIR", r"C:\working\AI26\briefcast\failed_files"))
+LOG_FILE_PATH = Path(os.getenv("LOG_FILE_PATH", r"C:\working\AI26\briefcast\briefcast.log"))
 
 INPUT_DOCS_DIR = BRIEFING_SOURCE_DIR
 PROCESSING_DOCS_DIR = PROCESSING_FILES_DIR
 PROCESSED_DOCS_DIR = PROCESSED_FILES_DIR
 
 # Models
-SUMMARY_MODEL = "gemini-3.8-flash"
-TRANSLATION_MODEL = "gemini-3.8-flash"
-OCR_MODEL = "gemini-3.8-flash"
-AUDIO_MODEL = "gemini-2.5-flash-preview-tts"
+SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gemini-3.8-flash")
+TRANSLATION_MODEL = os.getenv("TRANSLATION_MODEL", "gemini-3.8-flash")
+OCR_MODEL = os.getenv("OCR_MODEL", "gemini-3.8-flash")
+AUDIO_MODEL = os.getenv("AUDIO_MODEL", "gemini-2.5-flash-preview-tts")
 
 # Fallback models (used dynamically if primary model encounters 429 rate limit or quota limits)
-FALLBACK_SUMMARY_MODEL = "gemini-3.7-flash"
-FALLBACK_TRANSLATION_MODEL = "gemini-3.7-flash"
-FALLBACK_OCR_MODEL = "gemini-3.7-flash"
-FALLBACK_AUDIO_MODEL = "gemini-3.1-flash-tts-preview"
+FALLBACK_SUMMARY_MODEL = os.getenv("FALLBACK_SUMMARY_MODEL", "gemini-3.7-flash")
+FALLBACK_TRANSLATION_MODEL = os.getenv("FALLBACK_TRANSLATION_MODEL", "gemini-3.7-flash")
+FALLBACK_OCR_MODEL = os.getenv("FALLBACK_OCR_MODEL", "gemini-3.7-flash")
+FALLBACK_AUDIO_MODEL = os.getenv("FALLBACK_AUDIO_MODEL", "gemini-3.1-flash-tts-preview")
 
 # Guardrails for scanned / image-only PDFs and extraction limits
 MAX_OCR_PAGES = 10
