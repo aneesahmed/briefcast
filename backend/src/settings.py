@@ -1,16 +1,11 @@
 from pathlib import Path
 
-# Project directories (auto-detects server C:\briefcast or local C:\working\AI26\briefcast)
-if Path(r"C:\briefcast\briefing_source").exists():
-    BASE_DIR = Path(r"C:\briefcast")
-else:
-    BASE_DIR = Path(r"C:\working\AI26\briefcast")
-
-BRIEFING_SOURCE_DIR = BASE_DIR / "briefing_source"
-PROCESSING_FILES_DIR = BASE_DIR / "processing_files"
-PROCESSED_FILES_DIR = BASE_DIR / "processed_files"
-FAILED_FILES_DIR = BASE_DIR / "failed_files"
-LOG_FILE_PATH = BASE_DIR / "briefcast.log"
+# Project directories
+BRIEFING_SOURCE_DIR = Path(r"C:\working\AI26\briefcast\briefing_source")
+PROCESSING_FILES_DIR = Path(r"C:\working\AI26\briefcast\processing_files")
+PROCESSED_FILES_DIR = Path(r"C:\working\AI26\briefcast\processed_files")
+FAILED_FILES_DIR = Path(r"C:\working\AI26\briefcast\failed_files")
+LOG_FILE_PATH = Path(r"C:\working\AI26\briefcast\briefcast.log")
 
 INPUT_DOCS_DIR = BRIEFING_SOURCE_DIR
 PROCESSING_DOCS_DIR = PROCESSING_FILES_DIR

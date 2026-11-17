@@ -22,6 +22,7 @@ from src.services.telemetry import start_telemetry_scanner, stop_telemetry_scann
 from src.settings import LOG_FILE_PATH
 
 # Configure logging to write to both console and file
+LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
 file_handler = logging.FileHandler(LOG_FILE_PATH, encoding="utf-8")
 file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 
