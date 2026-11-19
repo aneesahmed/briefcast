@@ -1,0 +1,18 @@
+Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh
+Pull code from this repo (it's public now)
+https://github.com/aneesahmed/briefcast.git
+Open the following file and update the folder path after creating the folders
+briefcast/backend/src/settings.py
+
+BRIEFING_SOURCE_DIR = Path(r"C:\working\AI26\briefcast\briefing_source")
+PROCESSING_FILES_DIR = Path(r"C:\working\AI26\briefcast\processing_files")
+PROCESSED_FILES_DIR = Path(r"C:\working\AI26\briefcast\processed_files")
+FAILED_FILES_DIR = Path(r"C:\working\AI26\briefcast\failed_files")
+LOG_FILE_PATH = Path(r"C:\working\AI26\briefcast\briefcast.log")
+
+Move to the following folder
+briefcast\backend
+Run the following command 
+uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8443
+(The package manager "uv" will install the required Python and libraries the first time)
+
